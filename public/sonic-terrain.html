@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sonic Terrain</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:100%; height:100%; overflow:hidden; background:#0a0f1a; }
+  canvas { display:block; }
+  #ui {
+    position:fixed; bottom:20px; right:20px;
+    display:flex; gap:8px; z-index:10; font-family:system-ui;
+  }
+  #ui button {
+    padding:8px 16px; border:1px solid rgba(255,255,255,.12);
+    border-radius:8px; background:rgba(255,255,255,.05);
+    color:rgba(255,255,255,.65); font-size:12px; cursor:pointer;
+    backdrop-filter:blur(8px); transition:all .2s;
+  }
+  #ui button:hover { background:rgba(255,255,255,.1); color:#fff; }
+  #ui button.active { border-color:rgba(56,137,255,.5); background:rgba(56,137,255,.18); color:#fff; }
+  #log { position:fixed; top:10px; left:10px; color:#0f0; font:11px monospace; z-index:100; }
+</style>
+</head>
+<body>
+<div id="log"></div>
+<div id="ui">
+  <button id="btn-noc" class="active" onclick="switchTheme('nocturnal')">暗夜</button>
+  <button id="btn-neon" onclick="switchTheme('neon')">霓虹</button>
+  <button id="btn-forest" onclick="switchTheme('forest')">森林</button>
+  <button id="btn-mono" onclick="switchTheme('mono')">极简</button>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.157.0/build/three.min.js"></script>
+<script>
+(function(){
+var logEl = document.getElementById('log');
+function log(m) { logEl.textContent = m; console.log(m); }
+log('Loading...');
+
+// ─── Themes ───
+var THEMES = {
+  nocturnal: { bg:'#07111f', cool:'#3859ff', warm:'#f97316', accent:'#22d3ee', glow:1.0, speed:0.5 },
+  neon:      { bg:'#0a0014', cool:'#c026d3', warm:'#f43f5e', accent:'#e879f9', glow:1.3, speed:0.6 },
+  forest:    { bg:'#021a0f', cool:'#10b981', warm:'#d97706', accent:'#34d399', glow:0.9, speed:0.4 },
+  mono:      { bg:'#0a0a0a', cool:'#9ca3af', warm:'#d1d5db', accent:'#f3f4f6', glow:0.7, speed:0.3 }
+};
+var currentTheme = 'nocturnal';
+
+// ─── Renderer ───
+if (typeof THREE === 'undefined') { log('THREE not loaded!'); return; }
+log('THREE loaded');
+
+var renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setClearColor(new THREE.Color(THEMES.nocturnal.bg));
+document.body.insertBefore(renderer.domElement, document.body.firstChild);
+log('Renderer created');
+
+var scene = new THREE.Scene();
+var camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 0.1, 200);
+camera.position.set(0, 45, 45);
+camera.lookAt(0, 0, 0);
+log('Scene + camera ready');
+
+// ─── Build terrain ───
+var GRID = 160;
+var SPACING = 1.05;
+var COUNT = GRID * GRID;
+var OFFSET = (GRID * SPACING) / 2;
+log('Building ' + COUNT + ' blocks...');
+
+var geometry = new THREE.BoxGeometry(0.9, 1, 0.9);
+
+// Vertex Shader
+var vertShader = [
+  'attribute mat4 instanceMatrix;',
+  'uniform float uTime;',
+  'uniform float uSubBass, uBass, uLowMid, uMid, uHighMid;',
+  'uniform float uSmoothness, uDensity, uEnergy;',
+  'varying vec2 vUv; varying float vElevation; varying float vDistance;',
+  'varying vec3 vNormal; varying float vRelativeY; varying vec2 vInstancePos;',
+  THREE.ShaderChunk.common,
+  'float random(vec2 st) { return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123); }',
+  'void main() {',
+  '  vUv = uv; vNormal = normal;',
+  '  vec4 ipos = instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);',
+  '  vec2 pos2D = ipos.xz; vInstancePos = pos2D;',
+  '  float centerDist = length(pos2D); vDistance = centerDist;',
+  '  float rnd = random(pos2D);',
+  '  vec2 movingPos = pos2D * 0.05 + vec2(uTime * 0.1, uTime * 0.05);',
+  '  float baseNoise = (snoise(movingPos) + 1.0) * 0.5;',
+  '  float wave = sin(pos2D.x * 0.15 + pos2D.y * 0.1 - uTime * 0.6) * 0.5 + 0.5;',
+  '  float globalFalloff = smoothstep(60.0, 30.0, centerDist);',
+  '  float idleElevation = mix(baseNoise, wave, uSmoothness * 0.5 + 0.2) * 0.8 * globalFalloff;',
+  '  float subRegion = smoothstep(25.0, 0.0, centerDist);',
+  '  float subLift = uSubBass * subRegion * 5.0;',
+  '  float bassNoiseVal = snoise(pos2D * 0.1 - vec2(0.0, uTime * 0.2));',
+  '  float bassRegion = smoothstep(35.0, 5.0, centerDist + bassNoiseVal * 5.0);',
+  '  float bassLift = uBass * bassRegion * smoothstep(0.0, 1.0, rnd + uDensity * 0.5) * 4.0;',
+  '  float lowMidNoise = snoise(pos2D * 0.05 + vec2(uTime * 0.1, 0.0));',
+  '  float lowMidLift = uLowMid * (lowMidNoise * 0.5 + 0.5) * 2.5;',
+  '  float riverFlow = sin(pos2D.x * 0.2 + pos2D.y * 0.2 + snoise(pos2D * 0.1) * 2.0 - uTime * 2.0);',
+  '  float midLift = uMid * max(0.0, riverFlow) * 3.0;',
+  '  float highMidRegion = smoothstep(10.0, 45.0, centerDist);',
+  '  float highMidLift = 0.0;',
+  '  if (fract(rnd * 13.3) > 0.8) highMidLift = uHighMid * highMidRegion * fract(rnd * 7.7) * 2.5;',
+  '  float audioElevation = subLift + bassLift + lowMidLift + midLift + highMidLift;',
+  '  if (rnd > 0.99) audioElevation += uEnergy * 5.0;',
+  '  audioElevation *= globalFalloff;',
+  '  float elevation = idleElevation + audioElevation;',
+  '  float yPos = position.y + 0.5;',
+  '  vElevation = elevation; vRelativeY = yPos;',
+  '  float totalHeight = 1.0 + elevation;',
+  '  vec3 pos = position;',
+  '  pos.y = -0.5 + yPos * totalHeight;',
+  '  vec4 worldPosition = instanceMatrix * vec4(pos, 1.0);',
+  '  gl_Position = projectionMatrix * viewMatrix * worldPosition;',
+  '}'
+].join('\n');
+
+// Fragment Shader
+var fragShader = [
+  'uniform float uTime;',
+  'uniform float uPresence, uBrilliance, uAir;',
+  'uniform float uWarmth, uBrightness, uSharpness;',
+  'uniform vec3 uTerrainBg, uTerrainCool, uTerrainWarm;',
+  'uniform float uTerrainGlow;',
+  'varying vec2 vUv; varying float vElevation; varying float vDistance;',
+  'varying vec3 vNormal; varying float vRelativeY; varying vec2 vInstancePos;',
+  'float random(vec2 st) { return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123); }',
+  'void main() {',
+  '  bool isTop = vNormal.y > 0.5;',
+  '  float distFromTop = 1.0 - vRelativeY;',
+  '  float rnd = random(vInstancePos);',
+  '  float centerDist = length(vInstancePos);',
+  '  float normElevation = clamp(vElevation / 8.0, 0.0, 1.0);',
+  '  float distFade = 1.0 - smoothstep(40.0, 75.0, centerDist);',
+  '  float warmBlend = smoothstep(0.0, 1.0, uWarmth * 1.5 + (0.5 - centerDist / 80.0));',
+  '  vec3 zoneCore = mix(uTerrainCool, uTerrainWarm, warmBlend);',
+  '  vec3 zoneEdge = mix(uTerrainCool * 1.3, uTerrainWarm * 1.3, warmBlend);',
+  '  vec3 targetGlow = mix(zoneCore, zoneEdge, fract(rnd * 11.0));',
+  '  targetGlow = mix(targetGlow, vec3(0.4, 0.8, 1.0), uBrightness * 0.6);',
+  '  vec3 currentGlow = mix(uTerrainBg, targetGlow, normElevation) * uTerrainGlow * distFade;',
+  '  vec3 bodyColor = mix(uTerrainBg, uTerrainBg * 0.4, vRelativeY * distFade);',
+  '  vec3 finalColor;',
+  '  if (isTop) {',
+  '    float topIntensity = smoothstep(0.0, 0.4, normElevation);',
+  '    float twinkleDistFalloff = smoothstep(60.0, 30.0, centerDist);',
+  '    float twinkleMultiplier = mix(twinkleDistFalloff, 1.0, smoothstep(0.01, 0.1, normElevation));',
+  '    if (fract(rnd * 31.0) > 0.95 && normElevation < 0.1) topIntensity += uAir * 2.0 * twinkleMultiplier;',
+  '    finalColor = mix(uTerrainBg, currentGlow, topIntensity);',
+  '    float edgeX = smoothstep(0.05, 0.01, vUv.x) + smoothstep(0.95, 0.99, vUv.x);',
+  '    float edgeY = smoothstep(0.05, 0.01, vUv.y) + smoothstep(0.95, 0.99, vUv.y);',
+  '    float edge = min(edgeX + edgeY, 1.0);',
+  '    finalColor += currentGlow * edge * 0.8 * (topIntensity + 0.3);',
+  '    float flashChance = smoothstep(0.3, 1.0, uPresence);',
+  '    if (fract(rnd * 53.0) > 0.98 - flashChance * 0.1) {',
+  '      float flashSync = sin(uTime * 40.0 + rnd * 100.0) * 0.5 + 0.5;',
+  '      finalColor += mix(vec3(1.0), vec3(0.5, 1.0, 1.0), rnd) * flashSync * uPresence * (1.0 + uSharpness * 2.0) * twinkleMultiplier;',
+  '    }',
+  '    if (edge > 0.5 && fract(rnd * 89.0 + uTime * 2.0) > 0.98) {',
+  '      finalColor += vec3(1.0) * uBrilliance * 3.0 * twinkleMultiplier;',
+  '    }',
+  '  } else {',
+  '    float verticalFalloff = mix(1.0, 3.0, uSharpness);',
+  '    float sideGlow = smoothstep(0.5 / verticalFalloff, 0.0, distFromTop) * normElevation;',
+  '    if (normElevation < 0.02) sideGlow = 0.0;',
+  '    finalColor = mix(bodyColor, currentGlow, sideGlow * 1.5);',
+  '    float rimGlow = smoothstep(0.03, 0.0, distFromTop) * normElevation;',
+  '    finalColor += currentGlow * rimGlow;',
+  '  }',
+  '  float aerialFog = smoothstep(30.0, 65.0, vDistance);',
+  '  vec3 atmosphericColor = mix(uTerrainBg, uTerrainBg * 0.8, 0.4);',
+  '  finalColor = mix(finalColor, atmosphericColor, aerialFog * 0.5);',
+  '  float alphaFade = 1.0 - smoothstep(55.0, 78.0, vDistance);',
+  '  gl_FragColor = vec4(finalColor, alphaFade);',
+  '}'
+].join('\n');
+
+var material;
+try {
+  material = new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: {value:0}, uSubBass:{value:0}, uBass:{value:0},
+      uLowMid:{value:0}, uMid:{value:0}, uHighMid:{value:0},
+      uSmoothness:{value:0.5}, uDensity:{value:0.5}, uEnergy:{value:0},
+      uPresence:{value:0}, uBrilliance:{value:0}, uAir:{value:0},
+      uWarmth:{value:0.5}, uBrightness:{value:0.5}, uSharpness:{value:0},
+      uTerrainBg:{value:new THREE.Color(THEMES.nocturnal.bg)},
+      uTerrainCool:{value:new THREE.Color(THEMES.nocturnal.cool)},
+      uTerrainWarm:{value:new THREE.Color(THEMES.nocturnal.warm)},
+      uTerrainGlow:{value:THEMES.nocturnal.glow}
+    },
+    vertexShader: vertShader,
+    fragmentShader: fragShader,
+    transparent: true,
+    depthWrite: true
+  });
+  log('ShaderMaterial created');
+} catch(e) {
+  log('Shader error: ' + e.message);
+  return;
+}
+
+var mesh = new THREE.InstancedMesh(geometry, material, COUNT);
+mesh.frustumCulled = false;
+
+var dummy = new THREE.Matrix4();
+for (var x = 0; x < GRID; x++) {
+  for (var z = 0; z < GRID; z++) {
+    var i = x * GRID + z;
+    dummy.identity();
+    dummy.makeTranslation(x * SPACING - OFFSET, 0.5, z * SPACING - OFFSET);
+    mesh.setMatrixAt(i, dummy);
+  }
+}
+mesh.instanceMatrix.needsUpdate = true;
+scene.add(mesh);
+log('Mesh added: ' + COUNT + ' blocks');
+
+// ─── Simulated audio state ───
+var audioIn = {
+  subBass:0, bass:0, lowMid:0, mid:0, highMid:0,
+  presence:0, brilliance:0, air:0, energy:0
+};
+
+window.addEventListener('message', function(e) {
+  if (e.data && e.data.type === 'audio') {
+    Object.assign(audioIn, e.data);
+  } else if (e.data && e.data.type === 'theme') {
+    switchTheme(e.data.theme);
+  }
+});
+
+// ─── Demo bounce pattern ───
+function demoBounce(t) {
+  var beat = (Math.sin(t * 2.5) * 0.5 + 0.5);
+  var bassHit = beat > 0.7 ? Math.pow((beat - 0.7) / 0.3, 2) * 0.5 : 0;
+  return {
+    subBass: bassHit * 0.8 + Math.sin(t * 0.7) * 0.08 + 0.08,
+    bass: bassHit * 0.6 + Math.sin(t * 1.3) * 0.06 + 0.06,
+    lowMid: Math.sin(t * 1.8 + 1) * 0.08 + 0.1,
+    mid: Math.sin(t * 2.3 + 2) * 0.06 + 0.08,
+    highMid: Math.sin(t * 3.1) * 0.04 + 0.04,
+    presence: Math.sin(t * 4.5) * 0.03 + 0.03,
+    brilliance: Math.sin(t * 5.8) * 0.02 + 0.02,
+    air: Math.sin(t * 7.2) * 0.015 + 0.015,
+    energy: bassHit * 0.5 + Math.sin(t * 1.1) * 0.1 + 0.1
+  };
+}
+
+// ─── Theme switcher ───
+window.switchTheme = function(name) {
+  currentTheme = name;
+  var t = THEMES[name];
+  if (!t) return;
+  renderer.setClearColor(new THREE.Color(t.bg));
+  material.uniforms.uTerrainBg.value.set(t.bg);
+  material.uniforms.uTerrainCool.value.set(t.cool);
+  material.uniforms.uTerrainWarm.value.set(t.warm);
+  material.uniforms.uTerrainGlow.value = t.glow;
+  ['noc','neon','forest','mono'].forEach(function(id) {
+    var btn = document.getElementById('btn-' + id);
+    if (btn) btn.classList.toggle('active', id === name);
+  });
+};
+
+// ─── Render loop ───
+var useDemo = true;
+window.addEventListener('message', function handler(e) {
+  if (e.data && e.data.type === 'audio' && e.data.energy > 0.001) useDemo = false;
+});
+
+function animate() {
+  requestAnimationFrame(animate);
+  var dt = 0.016;
+  var u = material.uniforms;
+  var t = u.uTime.value;
+
+  mesh.rotation.y += THEMES[currentTheme].speed * 0.3 * dt;
+
+  var d = useDemo ? demoBounce(t) : audioIn;
+
+  u.uTime.value += dt;
+  u.uSubBass.value += (d.subBass - u.uSubBass.value) * 8 * dt;
+  u.uBass.value += (d.bass - u.uBass.value) * 8 * dt;
+  u.uLowMid.value += (d.lowMid - u.uLowMid.value) * 8 * dt;
+  u.uMid.value += (d.mid - u.uMid.value) * 8 * dt;
+  u.uHighMid.value += (d.highMid - u.uHighMid.value) * 8 * dt;
+  u.uPresence.value += (d.presence - u.uPresence.value) * 8 * dt;
+  u.uBrilliance.value += (d.brilliance - u.uBrilliance.value) * 8 * dt;
+  u.uAir.value += (d.air - u.uAir.value) * 8 * dt;
+  u.uEnergy.value += (d.energy - u.uEnergy.value) * 8 * dt;
+
+  var total = u.uSubBass.value + u.uBass.value + u.uLowMid.value + u.uMid.value
+    + u.uHighMid.value + u.uPresence.value + u.uBrilliance.value + u.uAir.value;
+  var inv = total > 0.001 ? 1/total : 1;
+  u.uWarmth.value += (Math.min(1, (u.uSubBass.value + u.uBass.value + u.uLowMid.value + u.uMid.value) * inv) - u.uWarmth.value) * 6 * dt;
+  u.uBrightness.value += (Math.min(1, (u.uPresence.value + u.uBrilliance.value + u.uAir.value) * inv) - u.uBrightness.value) * 6 * dt;
+  u.uSharpness.value += (u.uBrilliance.value * 1.2 - u.uSharpness.value) * 6 * dt;
+  u.uSmoothness.value += (Math.max(0.05, Math.min(1, 1 - u.uSharpness.value * 0.7)) - u.uSmoothness.value) * 6 * dt;
+  u.uDensity.value += (Math.min(1, inv * (u.uMid.value + u.uHighMid.value) * 1.5) - u.uDensity.value) * 6 * dt;
+
+  renderer.render(scene, camera);
+}
+
+window.addEventListener('resize', function() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+animate();
+log('Running! Grid: ' + GRID + 'x' + GRID);
+})();
+</script>
+</body>
+</html>
