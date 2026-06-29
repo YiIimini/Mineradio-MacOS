@@ -1,4 +1,5 @@
-const DEFAULT_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const { getPlatformUA } = require('./server/utils');
+const DEFAULT_UA = getPlatformUA();
 const FULL_STREAM_QUALITY_LIMIT_SEC = 7200;
 
 function clamp01(v) {

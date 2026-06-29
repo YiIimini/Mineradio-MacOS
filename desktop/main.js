@@ -3,6 +3,7 @@ const net = require('net');
 const path = require('path');
 const fs = require('fs');
 const { execFile, spawn } = require('child_process');
+const { clampNumber } = require('../server/utils');
 
 let mainWindow = null;
 let localServer = null;
@@ -23,6 +24,10 @@ let htmlFullscreenActive = false;
 let windowFullscreenActive = false;
 let activeLoginWindows = [];
 let mainWindowStateTimer = null;
+let tray = null;
+let touchBar = null;
+let macosMediaHelper = null;
+let macosMediaHelperBuffer = '';
 const registeredGlobalHotkeys = new Map();
 const mediaKeyShortcuts = new Map(); // macOS media keys, registered once at startup
 
@@ -683,27 +688,6 @@ function applyWindowedBounds(win) {
   sendWindowState(win);
 }
 
-function exitFullscreenToWindow(win) {
-  if (!win || win.isDestroyed()) return;
-  windowFullscreenActive = false;
-
-  if (!win.isFullScreen()) {
-    applyWindowedBounds(win);
-    return;
-  }
-
-  let applied = false;
-  const applyOnce = () => {
-    if (applied || !win || win.isDestroyed() || win.isFullScreen()) return;
-    applied = true;
-    applyWindowedBounds(win);
-  };
-
-  win.once('leave-full-screen', () => setTimeout(applyOnce, 50));
-  win.setFullScreen(false);
-  setTimeout(applyOnce, 500);
-}
-
 function toggleFullscreen(win) {
   if (!win || win.isDestroyed()) return;
   
@@ -769,12 +753,6 @@ function exitFullscreenToWindow(win) {
 function overlayUrl(page) {
   const port = mainServerPort || process.env.PORT || 3000;
   return `http://127.0.0.1:${port}/${page}`;
-}
-
-function clampNumber(value, min, max, fallback) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(min, Math.min(max, n));
 }
 
 function desktopLyricsDefaultBounds(payload = desktopLyricsState) {
@@ -878,7 +856,14 @@ function handleDesktopLyricsGlobalMiddleClick() {
 }
 
 function startDesktopLyricsMousePoller() {
-  if (process.platform !== 'win32' || desktopLyricsMousePoller) return;
+  if (desktopLyricsMousePoller) return;
+
+  if (process.platform === 'darwin') {
+    startMacOSDesktopLyricsMousePoller();
+    return;
+  }
+
+  if (process.platform !== 'win32') return;
   const script = `
 $ErrorActionPreference = "SilentlyContinue"
 Add-Type @"
@@ -927,6 +912,58 @@ while ($true) {
 }
 
 function stopDesktopLyricsMousePoller() {
+  if (process.platform === 'darwin') {
+    stopMacOSDesktopLyricsMousePoller();
+    return;
+  }
+  if (!desktopLyricsMousePoller) return;
+  try {
+    desktopLyricsMousePoller.kill();
+  } catch (e) {}
+  desktopLyricsMousePoller = null;
+  desktopLyricsMousePollerBuffer = '';
+}
+
+function startMacOSDesktopLyricsMousePoller() {
+  if (desktopLyricsMousePoller) return;
+  // macOS: use a compiled Swift helper to monitor global middle-click via CGEvent
+  // The helper binary is compiled from desktop/macos-lyrics-helper.swift during build
+  const helperPath = path.join(__dirname, 'macos-lyrics-helper');
+  if (!fs.existsSync(helperPath)) {
+    // Fallback: without the helper, middle-click lock toggle uses keyboard shortcut only
+    console.warn('[DesktopLyrics] macOS mouse helper not found at:', helperPath);
+    console.warn('[DesktopLyrics] Use Cmd+Shift+L to toggle lyrics lock state');
+    return;
+  }
+  try {
+    desktopLyricsMousePoller = spawn(helperPath, [], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    desktopLyricsMousePollerBuffer = '';
+    desktopLyricsMousePoller.stdout.on('data', (chunk) => {
+      desktopLyricsMousePollerBuffer += chunk.toString('utf8');
+      const lines = desktopLyricsMousePollerBuffer.split(/\r?\n/);
+      desktopLyricsMousePollerBuffer = lines.pop() || '';
+      lines.forEach((line) => {
+        if (line.trim() === 'MMB') handleDesktopLyricsGlobalMiddleClick();
+      });
+    });
+    desktopLyricsMousePoller.on('exit', () => {
+      desktopLyricsMousePoller = null;
+      desktopLyricsMousePollerBuffer = '';
+    });
+    desktopLyricsMousePoller.on('error', () => {
+      desktopLyricsMousePoller = null;
+      desktopLyricsMousePollerBuffer = '';
+    });
+    console.log('[DesktopLyrics] macOS mouse poller started');
+  } catch (e) {
+    console.warn('[DesktopLyrics] macOS mouse poller failed:', e.message);
+    desktopLyricsMousePoller = null;
+  }
+}
+
+function stopMacOSDesktopLyricsMousePoller() {
   if (!desktopLyricsMousePoller) return;
   try {
     desktopLyricsMousePoller.kill();
@@ -1007,9 +1044,7 @@ function createDesktopLyricsWindow(payload = {}) {
   });
   try {
     desktopLyricsWindow.setAlwaysOnTop(true, 'screen-saver');
-    if (process.platform !== 'darwin') {
     desktopLyricsWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  }
   } catch (e) {
     console.warn('Desktop lyrics topmost setup skipped:', e.message);
   }
@@ -1099,6 +1134,10 @@ $target = [IntPtr]::new([Int64]${hwnd})
 
 function positionWallpaperWindow() {
   if (!wallpaperWindow || wallpaperWindow.isDestroyed()) return;
+  if (process.platform === 'darwin') {
+    positionMacOSWallpaperWindow();
+    return;
+  }
   const bounds = screen.getPrimaryDisplay().bounds;
   wallpaperWindow.setBounds(bounds, false);
 }
@@ -1110,6 +1149,11 @@ function sendWallpaperState() {
 
 function createWallpaperWindow(payload = {}) {
   wallpaperState = { ...wallpaperState, ...payload, enabled: true };
+
+  if (process.platform === 'darwin') {
+    return createMacOSWallpaperWindow();
+  }
+
   if (wallpaperWindow && !wallpaperWindow.isDestroyed()) {
     positionWallpaperWindow();
     sendWallpaperState();
@@ -1160,6 +1204,66 @@ function closeWallpaperWindow() {
   }
   wallpaperWindow = null;
 }
+
+// --- macOS wallpaper: transparent desktop-background window ---
+function createMacOSWallpaperWindow() {
+  if (wallpaperWindow && !wallpaperWindow.isDestroyed()) {
+    positionMacOSWallpaperWindow();
+    sendWallpaperState();
+    return wallpaperWindow;
+  }
+  const bounds = screen.getPrimaryDisplay().bounds;
+  wallpaperWindow = new BrowserWindow({
+    ...bounds,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
+    resizable: false,
+    movable: false,
+    focusable: false,
+    skipTaskbar: true,
+    show: false,
+    type: 'panel',
+    title: 'Mineradio Wallpaper',
+    webPreferences: {
+      preload: path.join(__dirname, 'overlay-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      backgroundThrottling: false,
+    },
+  });
+  // macOS: place window at desktop-icon level so it sits behind normal windows
+  // but above the actual desktop wallpaper
+  wallpaperWindow.setAlwaysOnTop(true, 'screen-saver');
+  wallpaperWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  wallpaperWindow.setIgnoreMouseEvents(true, { forward: true });
+
+  wallpaperWindow.once('ready-to-show', () => {
+    if (!wallpaperWindow || wallpaperWindow.isDestroyed()) return;
+    positionMacOSWallpaperWindow();
+    wallpaperWindow.showInactive();
+    sendWallpaperState();
+  });
+  wallpaperWindow.webContents.once('did-finish-load', sendWallpaperState);
+  wallpaperWindow.on('closed', () => { wallpaperWindow = null; });
+  wallpaperWindow.webContents.on('did-finish-load', () => {
+    // macOS: force the wallpaper content to render at full resolution
+    wallpaperWindow.webContents.setZoomFactor(1);
+  });
+  wallpaperWindow.loadURL(overlayUrl('wallpaper.html'))
+    .catch((e) => console.warn('Wallpaper load failed:', e.message));
+  return wallpaperWindow;
+}
+
+function positionMacOSWallpaperWindow() {
+  if (!wallpaperWindow || wallpaperWindow.isDestroyed()) return;
+  const bounds = screen.getPrimaryDisplay().bounds;
+  wallpaperWindow.setBounds(bounds, false);
+}
+
+// --- end macOS wallpaper ---
 
 function closeOverlayWindows() {
   closeDesktopLyricsWindow();
@@ -1358,6 +1462,20 @@ ipcMain.handle('mineradio-desktop-lyrics-move-by', async (_event, dx, dy) => {
   }
 });
 
+ipcMain.handle('mineradio-media-center-update', async (_event, payload) => {
+  try {
+    sendMediaCenterUpdate(payload);
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('mineradio-media-center-playstate', async (_event, isPlaying, elapsedSec) => {
+  try {
+    sendMediaCenterPlayState(isPlaying, elapsedSec);
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
 ipcMain.handle('mineradio-wallpaper-set-enabled', async (_event, enabled, payload) => {
   try {
     if (enabled) createWallpaperWindow(payload || {});
@@ -1385,6 +1503,142 @@ ipcMain.handle('mineradio-wallpaper-update', async (_event, payload) => {
     return { ok: false, error: e.message || 'WALLPAPER_UPDATE_FAILED' };
   }
 });
+
+function createTray() {
+  if (process.platform !== 'darwin') return;
+  if (tray) return;
+  try {
+    const { Tray, Menu, nativeImage } = require('electron');
+    const iconPath = path.join(__dirname, '..', 'build', 'icon-tray.png');
+    let trayIcon;
+    if (fs.existsSync(iconPath)) {
+      trayIcon = nativeImage.createFromPath(iconPath);
+    } else {
+      trayIcon = nativeImage.createEmpty();
+    }
+    trayIcon = trayIcon.resize({ width: 18, height: 18 });
+    tray = new Tray(trayIcon);
+    const contextMenu = Menu.buildFromTemplate([
+      { label: '播放/暂停', click: () => sendGlobalHotkeyAction('togglePlay') },
+      { label: '下一首', click: () => sendGlobalHotkeyAction('nextTrack') },
+      { label: '上一首', click: () => sendGlobalHotkeyAction('prevTrack') },
+      { type: 'separator' },
+      { label: '显示 Mineradio', click: () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } } },
+      { type: 'separator' },
+      { label: '退出 Mineradio', click: () => { app.quit(); } },
+    ]);
+    tray.setToolTip('Mineradio');
+    tray.setContextMenu(contextMenu);
+    tray.on('click', () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.isVisible() ? mainWindow.focus() : (mainWindow.show(), mainWindow.focus());
+      }
+    });
+  } catch (e) {
+    console.warn('[Tray] creation failed:', e.message);
+    tray = null;
+  }
+}
+
+function updateTouchBar() {
+  if (process.platform !== 'darwin') return;
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (touchBar) return;
+  try {
+    const { TouchBar } = require('electron');
+    const { TouchBarButton, TouchBarSpacer } = TouchBar;
+    touchBar = new TouchBar({
+      items: [
+        new TouchBarButton({ label: '⏮', click: () => sendGlobalHotkeyAction('prevTrack') }),
+        new TouchBarButton({ label: '▶❙❙', click: () => sendGlobalHotkeyAction('togglePlay') }),
+        new TouchBarButton({ label: '⏭', click: () => sendGlobalHotkeyAction('nextTrack') }),
+        new TouchBarSpacer({ size: 'flexible' }),
+        new TouchBarButton({ label: '🎙', click: () => sendGlobalHotkeyAction('toggleLyrics') }),
+      ],
+    });
+    mainWindow.setTouchBar(touchBar);
+  } catch (e) {
+    console.warn('[TouchBar] setup failed:', e.message);
+    touchBar = null;
+  }
+}
+
+// --- macOS Media Center (MPNowPlayingInfoCenter) bridge ---
+function startMacOSMediaHelper() {
+  if (process.platform !== 'darwin') return;
+  if (macosMediaHelper) return;
+  const helperPath = path.join(__dirname, 'macos-media-helper');
+  if (!fs.existsSync(helperPath)) {
+    console.warn('[MediaCenter] helper not found at:', helperPath);
+    return;
+  }
+  try {
+    macosMediaHelper = spawn(helperPath, [], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    macosMediaHelperBuffer = '';
+    macosMediaHelper.stdout.on('data', (chunk) => {
+      macosMediaHelperBuffer += chunk.toString('utf8');
+      const lines = macosMediaHelperBuffer.split(/\r?\n/);
+      macosMediaHelperBuffer = lines.pop() || '';
+      lines.forEach((line) => {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('MRC:')) {
+          const cmd = trimmed.slice(4);
+          if (cmd === 'togglePlay') sendGlobalHotkeyAction('togglePlay');
+          else if (cmd === 'nextTrack') sendGlobalHotkeyAction('nextTrack');
+          else if (cmd === 'prevTrack') sendGlobalHotkeyAction('prevTrack');
+          else if (cmd.startsWith('changePlaybackPosition:')) {
+            const sec = parseFloat(cmd.slice(24)) || 0;
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('mineradio-seek-to', { seconds: sec });
+            }
+          }
+        }
+      });
+    });
+    macosMediaHelper.on('exit', () => { macosMediaHelper = null; });
+    macosMediaHelper.on('error', () => { macosMediaHelper = null; });
+    macosMediaHelper.stderr.on('data', (d) => {
+      console.warn('[MediaCenter] stderr:', d.toString().trim());
+    });
+    console.log('[MediaCenter] helper started');
+  } catch (e) {
+    console.warn('[MediaCenter] start failed:', e.message);
+    macosMediaHelper = null;
+  }
+}
+
+function sendMediaCenterUpdate(payload) {
+  if (!macosMediaHelper) return;
+  const p = payload || {};
+  const title = String(p.title || '').replace(/:/g, '：');
+  const artist = String(p.artist || '').replace(/:/g, '：');
+  const album = String(p.album || '').replace(/:/g, '：');
+  const coverUrl = String(p.cover || '');
+  const duration = Number(p.duration || 0) || 0;
+  const isPlaying = p.isPlaying ? '1' : '0';
+  const elapsed = Number(p.elapsed || 0) || 0;
+  const line = `update:${title}:${artist}:${album}:${coverUrl}:${duration}:${isPlaying}:${elapsed}\n`;
+  try { macosMediaHelper.stdin.write(line); } catch (_) {}
+}
+
+function sendMediaCenterPlayState(isPlaying, elapsedSec) {
+  if (!macosMediaHelper) return;
+  const line = `${isPlaying ? 'play' : 'pause'}:${Number(elapsedSec || 0)}\n`;
+  try { macosMediaHelper.stdin.write(line); } catch (_) {}
+}
+
+function stopMacOSMediaHelper() {
+  if (!macosMediaHelper) return;
+  try { macosMediaHelper.stdin.write('quit\n'); } catch (_) {}
+  setTimeout(() => {
+    try { if (macosMediaHelper) macosMediaHelper.kill(); } catch (_) {}
+    macosMediaHelper = null;
+  }, 300);
+}
+
+// --- end macOS Media Center ---
 
 async function createWindow() {
   htmlFullscreenActive = false;
@@ -1444,10 +1698,57 @@ async function createWindow() {
   });
 
   mainWindow.webContents.once('did-finish-load', () => {
+    // --- macOS: clean up stale zoom level residues ---
+    try {
+      mainWindow.webContents.setZoomLevel(0);
+      if (process.platform === 'darwin') {
+        const prefsPath = path.join(app.getPath('userData'), 'Preferences');
+        if (fs.existsSync(prefsPath)) {
+          const raw = fs.readFileSync(prefsPath, 'utf8');
+          const prefs = JSON.parse(raw);
+          let cleaned = false;
+          if (prefs.partition && prefs.partition.per_host_zoom_levels) {
+            delete prefs.partition.per_host_zoom_levels;
+            cleaned = true;
+          }
+          if (cleaned) fs.writeFileSync(prefsPath, JSON.stringify(prefs, null, 2));
+        }
+      }
+    } catch (_) {}
+    // --- end zoom cleanup ---
+
     sendWindowState(mainWindow);
   });
 
   mainWindow.webContents.on('before-input-event', (event, input) => {
+    // --- macOS: desktop lyrics lock toggle via keyboard shortcut ---
+    if (input.type === 'keyDown' && input.meta && input.shift && (input.key === 'L' || input.key === 'l')) {
+      event.preventDefault();
+      handleDesktopLyricsGlobalMiddleClick();
+      return;
+    }
+    // --- Zoom shortcut interception ---
+    if (input.type === 'keyDown' && (input.control || input.meta)) {
+      const key = input.key;
+      if (key === '0') {
+        event.preventDefault();
+        mainWindow.webContents.setZoomLevel(0);
+        return;
+      }
+      if (key === '=' || key === '+' || key === 'NumpadAdd') {
+        event.preventDefault();
+        const cur = mainWindow.webContents.getZoomLevel();
+        if (cur < 2.0) mainWindow.webContents.setZoomLevel(Math.min(2.0, cur + 0.5));
+        return;
+      }
+      if (key === '-' || key === 'NumpadSubtract') {
+        event.preventDefault();
+        const cur = mainWindow.webContents.getZoomLevel();
+        if (cur > -1.0) mainWindow.webContents.setZoomLevel(Math.max(-1.0, cur - 0.5));
+        return;
+      }
+    }
+    // --- Escape exits fullscreen ---
     if (input.type === 'keyDown' && (input.key === 'Escape' || input.code === 'Escape') && mainWindow.isFullScreen()) {
       event.preventDefault();
       exitFullscreenToWindow(mainWindow);
@@ -1553,6 +1854,9 @@ if (!gotSingleInstanceLock) {
     screen.on('display-added', () => scheduleWindowStateSend(mainWindow));
     screen.on('display-removed', () => scheduleWindowStateSend(mainWindow));
     await createWindow();
+    createTray();
+    updateTouchBar();
+    startMacOSMediaHelper();
   });
 
   app.on('activate', () => {
@@ -1571,6 +1875,8 @@ if (!gotSingleInstanceLock) {
     }
     mediaKeyShortcuts.clear();
     closeOverlayWindows();
+    stopMacOSMediaHelper();
+    if (tray) { try { tray.destroy(); } catch (_) {} tray = null; }
     if (localServer && localServer.close) localServer.close();
   });
 }

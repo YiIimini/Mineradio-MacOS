@@ -81,7 +81,15 @@
       ctx.drawImage(coverImg, x, y, side, side);
       ctx.restore();
     }
+    var WALLPAPER_FPS = 30;  // cap at 30fps — wallpaper is mostly static slow motion
+    var wallpaperLastFrame = 0;
     function draw(nowMs){
+      // Frame rate limiter: skip frames above WALLPAPER_FPS to save GPU
+      if (nowMs - wallpaperLastFrame < 1000 / WALLPAPER_FPS) {
+        requestAnimationFrame(draw);
+        return;
+      }
+      wallpaperLastFrame = nowMs;
       var now = nowMs * .001;
       ensureParticles();
       var opacity = Math.max(.35, Math.min(1, state.opacity || 1));

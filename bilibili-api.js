@@ -1,6 +1,8 @@
 // Bilibili search + playback API — zero-auth, works without login
 const https = require('https');
 const http = require('http');
+const { getPlatformUA } = require('./server/utils');
+const UA = getPlatformUA();
 
 const BILIBILI_SEARCH_API = 'https://api.bilibili.com/x/web-interface/wbi/search/type';
 const BILIBILI_PLAYURL_API = 'https://api.bilibili.com/x/player/playurl';
@@ -12,7 +14,7 @@ function biliRequest(url, opts = {}) {
     const req = mod.request(url, {
       method: opts.method || 'GET',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+        'User-Agent': UA,
         'Referer': 'https://www.bilibili.com/',
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'zh-CN,zh;q=0.9',

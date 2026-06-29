@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.3.0
+
+- 代码去重：消除 18 个重复工具函数，统一 UA 定义
+- 安全加固：CORS localhost、CSP、X-Frame-Options
+- 前端拆分：index.html 25K→862 行，提取 4 个独立 JS 模块
+- 加载优化：defer 并行加载、preload hints、Service Worker
+- GPU 节能：FPS 分级 (60/45/30)、空闲降帧、壁纸 30fps、GPU 检测
+- 路由重构：46 个 if/else → ROUTES 映射表
+- 测试：100 项单元测试
+- 错误边界：全局 onerror + unhandledrejection
+- 品牌：XxHuberrr→YiIimini, Mineradio→Mineradio-MacOS
+
 ## v1.2.0
 
 - 架构重构：项目结构重组，macOS 平台适配优化

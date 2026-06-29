@@ -2,6 +2,8 @@
 const https = require('https');
 const http = require('http');
 const crypto = require('crypto');
+const { getPlatformUA } = require('./server/utils');
+const UA = getPlatformUA();
 
 function kgRequest(url, opts = {}) {
   return new Promise((resolve, reject) => {
@@ -10,7 +12,7 @@ function kgRequest(url, opts = {}) {
     const req = mod.request(url, {
       method: opts.method || 'GET',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+        'User-Agent': UA,
         'Accept': 'application/json, text/plain, */*',
         ...opts.headers,
       },

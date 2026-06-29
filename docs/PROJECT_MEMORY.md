@@ -15,7 +15,7 @@
 - 可运行程序：`E:\桌面\播放器软件\Mineradio\Mineradio.exe`
 - 运行版主目录：`E:\桌面\播放器软件\Mineradio`
 - 真实代码/Git 仓库：`E:\桌面\播放器软件\Mineradio\resources\app`
-- GitHub 仓库：`https://github.com/XxHuberrr/Mineradio.git`
+- GitHub 仓库：`https://github.com/YiIimini/Mineradio.git`
 - 统一备份目录：`E:\桌面\播放器软件\工作区备份`
 - 当前源码检查点：`v1.1.0`
 - 最近正式安装包 Release 基线：`v1.1.0` 纯净安装版；`v1.0.10` 及更早安装包需隔离，不再建议安装或传播。
@@ -35,8 +35,8 @@
 
 ## Release Memory
 
-- `v1.1.0` 已发布到 GitHub：`https://github.com/XxHuberrr/Mineradio/releases/tag/v1.1.0`
-- 仓库已设为公开：`https://github.com/XxHuberrr/Mineradio`
+- `v1.1.0` 已发布到 GitHub：`https://github.com/YiIimini/Mineradio/releases/tag/v1.1.0`
+- 仓库已设为公开：`https://github.com/YiIimini/Mineradio`
 - `v1.1.0` Release 资产包括：
   - `Mineradio-1.1.0-Setup.exe`
   - `Mineradio-1.1.0-Setup.exe.blockmap`
@@ -44,7 +44,7 @@
 - `v1.1.0` 安装包 SHA256：`bd53aae4e551f5b0b5a398a51e6ec1de5a9a57cb42e5eecedb0a1647fdcee6e6`
 - `v1.1.0` 未上传 `latest.yml`，Release 创建时使用 `--latest=false`；GitHub `/releases/latest` 仍返回 `v1.0.10`，避免 `v1.0.10` 客户端软件内更新到 1.1.0。
 - 已批量给旧 Release（`v1.0.10` 到 `v0.9.9`）正文顶部追加旧安装包隔离警示；不要删除旧资产，只标记不可信和建议隔离。
-- `v1.0.10` 已发布到 GitHub：`https://github.com/XxHuberrr/Mineradio/releases/tag/v1.0.10`
+- `v1.0.10` 已发布到 GitHub：`https://github.com/YiIimini/Mineradio/releases/tag/v1.0.10`
 - `v1.0.10` Release 资产包括：
   - `latest.yml`
   - `Mineradio-1.0.10-Setup.exe`
@@ -54,7 +54,7 @@
   - `Mineradio-1.0.8.1.0.10.patch.json`（Release label：`Mineradio-1.0.8→1.0.10.patch.json`）
   - `Mineradio-1.0.9.1.0.10.patch.json`（Release label：`Mineradio-1.0.9→1.0.10.patch.json`）
 - `v1.0.10` 发布时 `gh` keyring token 失效，但普通 `git push` 仍可用；Release 通过 Git Credential Manager 取 GitHub token 后调用 GitHub API 创建并上传资产。
-- `v1.0.9` 已发布到 GitHub：`https://github.com/XxHuberrr/Mineradio/releases/tag/v1.0.9`
+- `v1.0.9` 已发布到 GitHub：`https://github.com/YiIimini/Mineradio/releases/tag/v1.0.9`
 - `v1.0.9` Release 资产包括：
   - `latest.yml`
   - `Mineradio-1.0.9-Setup.exe`
@@ -72,7 +72,7 @@
 - `v1.0.9` 安装器热修：用户实测旧安装包仍显示 C 盘 `AppData\Local\Programs\Mineradio`，原因是 electron-builder 内置目录页和旧安装注册表回填覆盖了默认路径。已关闭内置目录页，保留自定义安装目录页，并在目录页显示前强制优先使用 `D:\Mineradio`；tag 已更新到 `9d5f60c`，Release 资产已覆盖上传。
 - `v1.0.9` 安装器 UI 后续热修：安装包改为中文极简风格，白底黑字，`#3257F7` 蓝色点缀；欢迎页和安装目录页都简化为中文信息、默认路径和可选目录控件。该格式已保存到 `docs/INSTALLER_STYLE.md`，以后安装包按这套方式打包。
 - 补充：快速补丁可修复运行时单实例和快捷方式问题；安装器 UI/安装目录选择体验需要使用完整 `Mineradio-1.0.9-Setup.exe`。
-- `v1.0.8` 已发布到 GitHub：`https://github.com/XxHuberrr/Mineradio/releases/tag/v1.0.8`
+- `v1.0.8` 已发布到 GitHub：`https://github.com/YiIimini/Mineradio/releases/tag/v1.0.8`
 - `v1.0.8` Release 资产包括：
   - `latest.yml`
   - `Mineradio-1.0.8-Setup.exe`
@@ -86,7 +86,7 @@
   - `Mineradio-1.0.6-to-1.0.8.patch.json`
   - `Mineradio-1.0.7-to-1.0.8.patch.json`
 - `v1.0.8` 包含 QQ 音乐播放授权修复、Home 施工卡片和控制台展开、视觉预设顺序调整、用户存档、歌词颜色重启恢复、播放/暂停淡入淡出，以及安魂十字架选中态蓝色修复。
-- `v1.0.7` 已发布到 GitHub：`https://github.com/XxHuberrr/Mineradio/releases/tag/v1.0.7`
+- `v1.0.7` 已发布到 GitHub：`https://github.com/YiIimini/Mineradio/releases/tag/v1.0.7`
 - `v1.0.7` Release 资产包括：
   - `latest.yml`
   - `Mineradio-1.0.7-Setup.exe`
@@ -99,7 +99,7 @@
   - `Mineradio-1.0.5-to-1.0.7.patch.json`
   - `Mineradio-1.0.6-to-1.0.7.patch.json`
 - `v1.0.7` 包含电影镜头快节奏节拍分析试调，以及骷髅预设改名为“安魂”、副标题“骷髅·YUI7W”、黑体卡片和更明显的自定义视觉色粒子染色。
-- `v1.0.6` 已发布到 GitHub：`https://github.com/XxHuberrr/Mineradio/releases/tag/v1.0.6`
+- `v1.0.6` 已发布到 GitHub：`https://github.com/YiIimini/Mineradio/releases/tag/v1.0.6`
 - `v1.0.6` Release 资产包括：
   - `latest.yml`
   - `Mineradio-1.0.6-Setup.exe`
@@ -111,7 +111,7 @@
   - `Mineradio-1.0.4-to-1.0.6.patch.json`
   - `Mineradio-1.0.5-to-1.0.6.patch.json`
 - `v1.0.6` 将桌面歌词、桌面歌词穿透和壁纸模式入口标记为开发中并强制关闭；软件内更新日志文案改为“反正没什么人看，布想写日志了”。
-- `v1.0.5` 已发布到 GitHub：`https://github.com/XxHuberrr/Mineradio/releases/tag/v1.0.5`
+- `v1.0.5` 已发布到 GitHub：`https://github.com/YiIimini/Mineradio/releases/tag/v1.0.5`
 - `v1.0.5` Release 资产包括：
   - `latest.yml`
   - `Mineradio-1.0.5-Setup.exe`
@@ -123,7 +123,7 @@
   - `Mineradio-1.0.4-to-1.0.5.patch.json`
 - `v1.0.5` 更新链路新增国内分流下载、下载速度/剩余时间显示、失败原因提示、digest 校验和更严格的补丁版本匹配。
 - 2026-06-18 已确认 GitHub CLI / `gh auth refresh` 使用 `127.0.0.1:10808` 可正常登录；不要走旧代理 `127.0.0.1:26001`，该端口会 `connection refused`。需要临时修复时先清空 `HTTP_PROXY`/`HTTPS_PROXY`，再设为 `http://127.0.0.1:10808`。
-- `v1.0.4` 已发布到 GitHub：`https://github.com/XxHuberrr/Mineradio/releases/tag/v1.0.4`
+- `v1.0.4` 已发布到 GitHub：`https://github.com/YiIimini/Mineradio/releases/tag/v1.0.4`
 - `v1.0.4` Release 资产包括：
   - `latest.yml`
   - `Mineradio-1.0.4-Setup.exe`
@@ -132,7 +132,7 @@
   - `Mineradio-1.0.1-to-1.0.4.patch.json`
   - `Mineradio-1.0.2-to-1.0.4.patch.json`
   - `Mineradio-1.0.3-to-1.0.4.patch.json`
-- `v1.0.3` 已发布到 GitHub：`https://github.com/XxHuberrr/Mineradio/releases/tag/v1.0.3`
+- `v1.0.3` 已发布到 GitHub：`https://github.com/YiIimini/Mineradio/releases/tag/v1.0.3`
 - `v1.0.3` Release 资产包括：
   - `latest.yml`
   - `Mineradio-1.0.3-Setup.exe`

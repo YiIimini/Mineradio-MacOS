@@ -1,5 +1,5 @@
 // ====================================================================
-//  粒子音乐可视化播放器 — Server v2
+//  Mineradio-MacOS — Server v1.3
 //  - 网易云搜索 / 歌曲URL / 封面/音频代理
 //  - 扫码登录 (login_qr_*) + cookie 持久化 (./.cookie)
 //  - 试听检测 (freeTrialInfo) + 全 quality 探测
@@ -55,16 +55,61 @@ const tls = require('tls');
 const { once } = require('events');
 const { fileURLToPath } = require('url');
 const { analyzePodcastDjStream, analyzePodcastDjIntro } = require('./dj-analyzer');
+const qqmusic = require('./server/qqmusic');
+const weatherModule = require('./server/weather');
+const podcastModule = require('./server/podcast');
+const {
+  MIME, serveStatic, sendJSON,
+  isLocalOrigin, getSafeOrigin,
+  normalizeVersion, compareVersions,
+  sha256Hex, sha512Base64, sha512Hex,
+  normalizeDigest, clampNumber,
+  cleanReleaseLine, extractReleaseNotes,
+  buildMirrorUrl,
+  collectCookiePair, collectCookieInput, normalizeCookieHeader, rawCookieFallback,
+  parseCookieString, serializeCookieObject,
+  readRequestBody, parseJSONText,
+  getPlatformUA,
+} = require('./server/utils');
+
+// --- Wire up sub-modules (deferred setup after function definitions) ---
+let _modulesWired = false;
+function wireModules() {
+  if (_modulesWired) return;
+  _modulesWired = true;
+
+  // Weather module needs: handleSearch, handleSongUrl, mapSongRecord, requestText, requestJson, UA
+  weatherModule.setup({
+    UA, handleSearch, handleSongUrl, mapSongRecord, requestText, requestJson,
+  });
+  weatherModule.setCookie(userCookie);
+
+  // Podcast module needs: mapArtists, Netease API functions
+  podcastModule.setup({
+    mapArtists,
+    dj_sublist, user_audio, dj_paygift,
+    sati_resource_sub_list, record_recent_voice,
+  });
+  podcastModule.setCookie(userCookie);
+}
+
+// Sync cookie changes to sub-modules
+const _origSaveCookie = saveCookie;
+saveCookie = function(c) {
+  _origSaveCookie(c);
+  weatherModule.setCookie(userCookie);
+  podcastModule.setCookie(userCookie);
+};
 
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const UA = getPlatformUA();
 const COOKIE_FILE = process.env.COOKIE_FILE || path.join(__dirname, '.cookie');
 const QQ_COOKIE_FILE = process.env.QQ_COOKIE_FILE || path.join(__dirname, '.qq-cookie');
 const UPDATE_WORK_DIR = process.env.MINERADIO_UPDATE_DIR || path.join(__dirname, 'updates');
 const UPDATE_DOWNLOAD_DIR = process.env.MINERADIO_UPDATE_DOWNLOAD_DIR || path.join(UPDATE_WORK_DIR, 'downloads');
 const UPDATE_PATCH_BACKUP_DIR = process.env.MINERADIO_PATCH_BACKUP_DIR || path.join(UPDATE_WORK_DIR, 'backups', 'patches');
-const BEATMAP_CACHE_DIR = process.env.MINERADIO_BEAT_CACHE_DIR || 'D:\\MineradioCache\\beatmaps';
+const BEATMAP_CACHE_DIR = process.env.MINERADIO_BEAT_CACHE_DIR || path.join(require('os').homedir(), 'Library', 'Caches', 'com.mineradio.desktop', 'beatmaps');
 const APP_PACKAGE = readPackageInfo();
 const APP_VERSION = process.env.MINERADIO_VERSION || APP_PACKAGE.version || '0.9.11';
 const UPDATE_CONFIG = readUpdateConfig(APP_PACKAGE);
@@ -72,9 +117,9 @@ const PATCH_MAX_BYTES = 12 * 1024 * 1024;
 const PATCH_ALLOWED_ROOTS = new Set(['public', 'desktop', 'build']);
 const PATCH_ALLOWED_FILES = new Set(['server.js', 'dj-analyzer.js', 'package.json', 'package-lock.json']);
 const UPDATE_FALLBACK_NOTES = [
-  '电影镜头节奏更松',
-  '音源失败自动换源',
-  '右上角更新提示',
+  'v1.3.0: 代码优化、安全加固、GPU节能',
+  '路由表重构 + 前端模块化',
+  '100项测试覆盖核心逻辑',
 ];
 const OPEN_METEO_FORECAST_URL = 'https://api.open-meteo.com/v1/forecast';
 const OPEN_METEO_GEOCODE_URL = 'https://geocoding-api.open-meteo.com/v1/search';
@@ -110,103 +155,28 @@ function applySystemCertificateAuthorities() {
 
 applySystemCertificateAuthorities();
 
-const MIME = {
-  '.html': 'text/html; charset=utf-8',
-  '.js':   'application/javascript',
-  '.css':  'text/css',
-  '.json': 'application/json',
-  '.png':  'image/png',
-  '.jpg':  'image/jpeg',
-  '.ico':  'image/x-icon',
-  '.svg':  'image/svg+xml',
-};
-
 // ---------- Cookie 持久化 ----------
-const COOKIE_ATTRIBUTE_NAMES = new Set(['path', 'domain', 'expires', 'max-age', 'samesite', 'secure', 'httponly']);
-function collectCookiePair(picked, key, value) {
-  key = String(key || '').trim();
-  if (!key || COOKIE_ATTRIBUTE_NAMES.has(key.toLowerCase())) return;
-  if (value === null || value === undefined) return;
-  picked.set(key, String(value).trim());
-}
-function collectCookieInput(input, picked) {
-  if (input === null || input === undefined) return;
-  if (Array.isArray(input)) {
-    input.forEach(item => collectCookieInput(item, picked));
-    return;
-  }
-  if (typeof input === 'object') {
-    if (input.name && Object.prototype.hasOwnProperty.call(input, 'value')) {
-      collectCookiePair(picked, input.name, input.value);
-      return;
-    }
-    Object.keys(input).forEach(key => {
-      const value = input[key];
-      if (value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, 'value')) {
-        collectCookiePair(picked, key, value.value);
-      } else if (typeof value !== 'object') {
-        collectCookiePair(picked, key, value);
-      }
-    });
-    return;
-  }
-  String(input).split(/\r?\n/).forEach(line => {
-    line.split(';').forEach(part => {
-      const raw = String(part || '').trim();
-      const idx = raw.indexOf('=');
-      if (idx <= 0) return;
-      collectCookiePair(picked, raw.slice(0, idx), raw.slice(idx + 1));
-    });
-  });
-}
-function normalizeCookieHeader(input) {
-  const picked = new Map();
-  collectCookieInput(input, picked);
-  return Array.from(picked.entries())
-    .filter(([key, value]) => key && value != null && String(value) !== '')
-    .map(([key, value]) => `${key}=${value}`)
-    .join('; ');
-}
-function rawCookieFallback(input) {
-  if (typeof input === 'string') return input.trim();
-  if (Array.isArray(input) && input.every(item => typeof item === 'string')) return input.join('; ').trim();
-  return '';
-}
 let userCookie = '';
 try { if (fs.existsSync(COOKIE_FILE)) userCookie = fs.readFileSync(COOKIE_FILE, 'utf8').trim(); }
 catch (e) { userCookie = ''; }
 function saveCookie(c) {
   userCookie = normalizeCookieHeader(c) || rawCookieFallback(c);
-  try { fs.writeFileSync(COOKIE_FILE, userCookie); } catch (e) {}
+  try { fs.writeFileSync(COOKIE_FILE, userCookie); } catch (e) {
+    console.warn('[Cookie] Failed to persist Netease cookie:', e.message);
+  }
 }
 
 let qqCookie = '';
 try { if (fs.existsSync(QQ_COOKIE_FILE)) qqCookie = fs.readFileSync(QQ_COOKIE_FILE, 'utf8').trim(); }
-catch (e) { qqCookie = ''; }
+catch (e) { console.warn('[Cookie] Failed to read QQ cookie file:', e.message); qqCookie = ''; }
 function saveQQCookie(c) {
   qqCookie = normalizeCookieHeader(c) || rawCookieFallback(c);
-  try { fs.writeFileSync(QQ_COOKIE_FILE, qqCookie); } catch (e) {}
+  try { fs.writeFileSync(QQ_COOKIE_FILE, qqCookie); } catch (e) {
+    console.warn('[Cookie] Failed to persist QQ cookie:', e.message);
+  }
 }
 
 // ---------- 工具 ----------
-function serveStatic(res, filePath) {
-  const ext = path.extname(filePath);
-  fs.readFile(filePath, (err, data) => {
-    if (err) { res.writeHead(404); res.end('Not Found'); return; }
-    res.writeHead(200, { 'Content-Type': MIME[ext] || 'text/plain' });
-    res.end(data);
-  });
-}
-function sendJSON(res, data, status) {
-  res.writeHead(status || 200, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Access-Control-Allow-Origin': '*',
-    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
-    'Pragma': 'no-cache',
-    'Expires': '0',
-  });
-  res.end(JSON.stringify(data));
-}
 function readPackageInfo() {
   try {
     const raw = fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8');
@@ -270,26 +240,12 @@ function readUpdateMirrors(local) {
   });
   return mirrors.slice(0, 6);
 }
-function normalizeDigest(value, algorithm) {
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  const prefix = new RegExp('^' + algorithm + ':', 'i');
-  return raw.replace(prefix, '').trim().replace(/^['"]|['"]$/g, '');
-}
 function assetDigestInfo(asset) {
   const digest = String(asset && asset.digest || '').trim();
   return {
     sha256: normalizeDigest((asset && asset.sha256) || (/^sha256:/i.test(digest) ? digest : ''), 'sha256').toLowerCase(),
     sha512: normalizeDigest((asset && asset.sha512) || (/^sha512:/i.test(digest) ? digest : ''), 'sha512'),
   };
-}
-function buildMirrorUrl(originalUrl, mirror) {
-  const source = String(originalUrl || '').trim();
-  const base = String(mirror || '').trim();
-  if (!/^https?:\/\//i.test(source) || !/^https?:\/\//i.test(base)) return '';
-  if (base.includes('{encodedUrl}')) return base.replace(/\{encodedUrl\}/g, encodeURIComponent(source));
-  if (base.includes('{url}')) return base.replace(/\{url\}/g, source);
-  return base.replace(/\/+$/, '/') + source;
 }
 function uniqueDownloadCandidates(urls, opts) {
   opts = opts || {};
@@ -328,47 +284,18 @@ function publicDownloadUrls(candidates) {
     .map(item => item && item.url)
     .filter(Boolean);
 }
-function normalizeVersion(value) {
-  return String(value || '').trim().replace(/^v/i, '').replace(/[+].*$/, '').replace(/-.+$/, '');
-}
-function compareVersions(a, b) {
-  const aa = normalizeVersion(a).split('.').map(n => parseInt(n, 10) || 0);
-  const bb = normalizeVersion(b).split('.').map(n => parseInt(n, 10) || 0);
-  const len = Math.max(aa.length, bb.length, 3);
-  for (let i = 0; i < len; i++) {
-    const left = aa[i] || 0;
-    const right = bb[i] || 0;
-    if (left > right) return 1;
-    if (left < right) return -1;
-  }
-  return 0;
-}
-function cleanReleaseLine(line) {
-  return String(line || '')
-    .replace(/^\s*#{1,6}\s*/, '')
-    .replace(/^\s*[-*]\s+/, '')
-    .replace(/^\s*\d+[.)]\s+/, '')
-    .replace(/\*\*/g, '')
-    .replace(/`/g, '')
-    .trim();
-}
-function extractReleaseNotes(body) {
-  const notes = [];
-  String(body || '').split(/\r?\n/).forEach(line => {
-    const text = cleanReleaseLine(line);
-    if (!text) return;
-    if (/^(what'?s changed|changes|changelog|full changelog|更新日志)$/i.test(text)) return;
-    if (/^https?:\/\//i.test(text)) return;
-    if (text.length > 72) return;
-    notes.push(text);
-  });
-  return notes.slice(0, 4);
-}
 function pickReleaseAsset(assets) {
   const list = Array.isArray(assets) ? assets : [];
-  const preferred = list.find(a => /\.(exe|msi)$/i.test(a && a.name || ''))
-    || list.find(a => /\.(zip|7z)$/i.test(a && a.name || ''))
-    || list[0];
+  let preferred;
+  if (process.platform === 'darwin') {
+    preferred = list.find(a => /\.dmg$/i.test(a && a.name || ''))
+      || list.find(a => /\.zip$/i.test(a && a.name || ''))
+      || list[0];
+  } else {
+    preferred = list.find(a => /\.(exe|msi)$/i.test(a && a.name || ''))
+      || list.find(a => /\.zip$/i.test(a && a.name || ''))
+      || list[0];
+  }
   if (!preferred) return null;
   const digest = assetDigestInfo(preferred);
   const candidates = uniqueDownloadCandidates(preferred.browser_download_url || '');
@@ -441,7 +368,7 @@ function normalizeManifestUpdateInfo(data) {
   const assetUrls = [downloadUrl].concat(Array.isArray(asset.downloadUrls) ? asset.downloadUrls : []);
   const patchUrls = patch ? [patch.downloadUrl].concat(Array.isArray(patch.downloadUrls) ? patch.downloadUrls : []) : [];
   const patchInfo = patch && patch.downloadUrl ? {
-    name: patch.name || updateAssetNameFromUrl(patch.downloadUrl) || `Mineradio-${APP_VERSION}→${latestVersion}.patch.json`,
+    name: patch.name || updateAssetNameFromUrl(patch.downloadUrl) || `Mineradio-MacOS-${APP_VERSION}→${latestVersion}.patch.json`,
     size: Number(patch.size || 0) || 0,
     contentType: patch.contentType || patch.content_type || 'application/json',
     downloadUrl: patch.downloadUrl,
@@ -455,7 +382,7 @@ function normalizeManifestUpdateInfo(data) {
     ? release.notes.slice(0, 4).map(cleanReleaseLine).filter(Boolean)
     : (extractReleaseNotes(release.body || data.body).length ? extractReleaseNotes(release.body || data.body) : UPDATE_FALLBACK_NOTES);
   const assetInfo = downloadUrl ? {
-    name: asset.name || updateAssetNameFromUrl(downloadUrl) || `Mineradio-${latestVersion}-Setup.exe`,
+    name: asset.name || updateAssetNameFromUrl(downloadUrl) || `Mineradio-${latestVersion}.dmg`,
     size: Number(asset.size || 0) || 0,
     contentType: asset.contentType || asset.content_type || '',
     downloadUrl,
@@ -471,7 +398,7 @@ function normalizeManifestUpdateInfo(data) {
     latestVersion,
     release: {
       tagName: release.tagName || release.tag_name || data.tagName || ('v' + latestVersion),
-      name: release.name || data.name || ('Mineradio v' + latestVersion),
+      name: release.name || data.name || ('Mineradio-MacOS v' + latestVersion),
       version: latestVersion,
       publishedAt: release.publishedAt || release.published_at || data.publishedAt || '',
       htmlUrl: release.htmlUrl || release.html_url || data.htmlUrl || '',
@@ -490,7 +417,7 @@ async function readUpdateManifest(ref) {
   if (!value) throw new Error('UPDATE_MANIFEST_MISSING');
   if (/^https?:\/\//i.test(value)) {
     const resp = await fetch(value, {
-      headers: { 'User-Agent': `Mineradio/${APP_VERSION}` },
+      headers: { 'User-Agent': `Mineradio-MacOS/${APP_VERSION}` },
     });
     if (!resp.ok) throw new Error('Update manifest ' + resp.status);
     return resp.json();
@@ -508,27 +435,21 @@ async function fetchManifestUpdateInfo(ref) {
 }
 function beatCacheRootInfo() {
   const dir = path.resolve(BEATMAP_CACHE_DIR);
-  const root = path.parse(dir).root;
-  const drive = root ? root.replace(/[\\\/]+$/, '').toUpperCase() : '';
-  const allowed = !!root && !/^C:$/i.test(drive);
-  const available = allowed && fs.existsSync(root);
-  return { dir, root, drive, allowed, available };
+  const allowed = true;
+  const available = true;
+  return { dir, root: dir, drive: '', allowed, available };
 }
 function ensureBeatMapCacheDir() {
   const info = beatCacheRootInfo();
-  if (!info.allowed) {
-    const err = new Error('BEAT_CACHE_ON_C_DRIVE_DISABLED');
-    err.code = 'BEAT_CACHE_ON_C_DRIVE_DISABLED';
-    err.info = info;
-    throw err;
+  try {
+    fs.mkdirSync(info.dir, { recursive: true });
+  } catch (e) {
+    console.error('[BeatMapCache] Failed to create cache directory:', info.dir, e.message);
+    // Return a temp directory as fallback so beatmap analysis doesn't break
+    const tmp = path.join(require('os').tmpdir(), 'mineradio-beatmaps');
+    try { fs.mkdirSync(tmp, { recursive: true }); } catch (_) {}
+    return tmp;
   }
-  if (!info.available) {
-    const err = new Error('BEAT_CACHE_DRIVE_UNAVAILABLE');
-    err.code = 'BEAT_CACHE_DRIVE_UNAVAILABLE';
-    err.info = info;
-    throw err;
-  }
-  fs.mkdirSync(info.dir, { recursive: true });
   return info.dir;
 }
 function safeBeatMapCacheFile(key) {
@@ -643,7 +564,7 @@ async function fetchTextFromCandidates(candidates, timeoutMs) {
     const candidate = list[i];
     try {
       const resp = await fetchWithTimeout(candidate.url, {
-        headers: { 'User-Agent': `Mineradio/${APP_VERSION}` },
+        headers: { 'User-Agent': `Mineradio-MacOS/${APP_VERSION}` },
       }, timeoutMs || 6500);
       if (!resp.ok) throw updateError('HTTP_' + resp.status, 'HTTP ' + resp.status);
       return { text: await resp.text(), candidate };
@@ -669,7 +590,7 @@ function githubReleaseDownloadUrl(version, fileName) {
 }
 function parseLatestYmlUpdateInfo(text, reason) {
   const latestVersion = normalizeVersion(yamlScalar(text, 'version') || APP_VERSION) || APP_VERSION;
-  const assetPath = yamlScalar(text, 'path') || yamlScalar(text, 'url') || `Mineradio-${latestVersion}-Setup.exe`;
+  const assetPath = yamlScalar(text, 'path') || yamlScalar(text, 'url') || `Mineradio-${latestVersion}.dmg`;
   const sha512 = normalizeDigest(yamlScalar(text, 'sha512'), 'sha512');
   const size = Number(yamlScalar(text, 'size') || 0) || 0;
   const releaseDate = yamlScalar(text, 'releaseDate');
@@ -692,7 +613,7 @@ function parseLatestYmlUpdateInfo(text, reason) {
     latestVersion,
     release: {
       tagName: 'v' + latestVersion,
-      name: 'Mineradio v' + latestVersion,
+      name: 'Mineradio-MacOS v' + latestVersion,
       version: latestVersion,
       publishedAt: releaseDate,
       htmlUrl: `https://github.com/${UPDATE_CONFIG.owner}/${UPDATE_CONFIG.repo}/releases/tag/v${latestVersion}`,
@@ -724,7 +645,7 @@ async function fetchLatestUpdateInfo() {
     const resp = await fetch(apiUrl, {
       signal: controller.signal,
       headers: {
-        'User-Agent': `Mineradio/${APP_VERSION}`,
+        'User-Agent': `Mineradio-MacOS/${APP_VERSION}`,
         'Accept': 'application/vnd.github+json',
       },
     });
@@ -745,7 +666,7 @@ async function fetchLatestUpdateInfo() {
       latestVersion,
       release: {
         tagName: data.tag_name || ('v' + latestVersion),
-        name: data.name || ('Mineradio v' + latestVersion),
+        name: data.name || ('Mineradio-MacOS v' + latestVersion),
         version: latestVersion,
         publishedAt: data.published_at || '',
         htmlUrl: data.html_url || '',
@@ -766,13 +687,14 @@ async function fetchLatestUpdateInfo() {
   }
 }
 function safeUpdateFileName(name, version) {
-  const raw = String(name || '').trim() || `Mineradio-${version || APP_VERSION}.exe`;
+  const defaultExt = process.platform === 'darwin' ? '.dmg' : '.exe';
+  const raw = String(name || '').trim() || `Mineradio-${version || APP_VERSION}${defaultExt}`;
   const cleaned = raw
     .replace(/[<>:"/\\|?*\x00-\x1F]/g, '-')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 160);
-  return cleaned || `Mineradio-${version || APP_VERSION}.exe`;
+  return cleaned || `Mineradio-${version || APP_VERSION}${defaultExt}`;
 }
 function publicUpdateJob(job) {
   if (!job) return { ok: false, error: 'UPDATE_JOB_NOT_FOUND' };
@@ -821,7 +743,7 @@ async function downloadUpdateAsset(job) {
 
     const resp = await fetch(job.downloadUrl, {
       headers: {
-        'User-Agent': `Mineradio/${APP_VERSION}`,
+        'User-Agent': `Mineradio-MacOS/${APP_VERSION}`,
       },
     });
     if (!resp.ok) throw new Error('Download failed ' + resp.status);
@@ -880,12 +802,6 @@ async function downloadUpdateAsset(job) {
     job.error = e.message || 'UPDATE_DOWNLOAD_FAILED';
     job.updatedAt = Date.now();
   }
-}
-function sha512Base64(buffer) {
-  return crypto.createHash('sha512').update(buffer).digest('base64');
-}
-function sha512Hex(buffer) {
-  return crypto.createHash('sha512').update(buffer).digest('hex');
 }
 function verifyUpdateBuffer(buffer, job) {
   const expectedSize = Number(job.expectedSize || job.total || 0) || 0;
@@ -1007,7 +923,7 @@ async function downloadUpdateAssetWithMirrors(job) {
       job.message = job.total ? '正在下载完整安装包' : '正在下载完整安装包，等待服务器返回大小';
 
       const resp = await fetchWithTimeout(candidate.url, {
-        headers: { 'User-Agent': `Mineradio/${APP_VERSION}` },
+        headers: { 'User-Agent': `Mineradio-MacOS/${APP_VERSION}` },
       }, 14000);
       if (!resp.ok) throw updateError('HTTP_' + resp.status, 'HTTP ' + resp.status);
 
@@ -1131,9 +1047,6 @@ function startUpdateDownloadJob(info) {
   downloadUpdateAssetWithMirrors(job);
   return publicUpdateJob(job);
 }
-function sha256Hex(buffer) {
-  return crypto.createHash('sha256').update(buffer).digest('hex');
-}
 function safePatchRelativePath(value) {
   const rel = String(value || '').replace(/\\/g, '/').replace(/^\/+/, '').trim();
   if (!rel || rel.includes('\0')) return '';
@@ -1205,7 +1118,7 @@ async function downloadAndApplyPatch(job) {
     job.updatedAt = Date.now();
 
     const resp = await fetch(job.downloadUrl, {
-      headers: { 'User-Agent': `Mineradio/${APP_VERSION}` },
+      headers: { 'User-Agent': `Mineradio-MacOS/${APP_VERSION}` },
     });
     if (!resp.ok) throw new Error('Patch download failed ' + resp.status);
 
@@ -1257,7 +1170,7 @@ async function downloadPatchBufferFromCandidate(job, candidate, index, total) {
   job.updatedAt = Date.now();
 
   const resp = await fetchWithTimeout(candidate.url, {
-    headers: { 'User-Agent': `Mineradio/${APP_VERSION}` },
+    headers: { 'User-Agent': `Mineradio-MacOS/${APP_VERSION}` },
   }, 12000);
   if (!resp.ok) throw updateError('HTTP_' + resp.status, 'HTTP ' + resp.status);
 
@@ -1349,7 +1262,7 @@ function startUpdatePatchJob(info) {
     received: 0,
     total: patch.size || 0,
     mode: 'patch',
-    fileName: patch.name || safeUpdateFileName('', version).replace(/\.exe$/i, '.patch.json'),
+    fileName: patch.name || safeUpdateFileName('', version).replace(/\.dmg$/i, '.patch.json'),
     filePath: '',
     version,
     downloadUrl,
@@ -1373,26 +1286,6 @@ function startUpdatePatchJob(info) {
   downloadAndApplyPatchWithMirrors(job);
   return publicUpdateJob(job);
 }
-function readRequestBody(req) {
-  return new Promise(resolve => {
-    let raw = '';
-    req.on('data', chunk => {
-      raw += chunk;
-      if (raw.length > 8 * 1024 * 1024) req.destroy();
-    });
-    req.on('end', () => {
-      if (!raw) { resolve({}); return; }
-      try { resolve(JSON.parse(raw)); }
-      catch (e) {
-        const params = new URLSearchParams(raw);
-        const out = {};
-        params.forEach((v, k) => { out[k] = v; });
-        resolve(out);
-      }
-    });
-    req.on('error', () => resolve({}));
-  });
-}
 function normalizeApiCode(payload) {
   const body = payload && (payload.body || payload);
   return Number((body && body.code) || (body && body.body && body.body.code) || (payload && payload.status) || 0);
@@ -1400,25 +1293,6 @@ function normalizeApiCode(payload) {
 function normalizeApiMessage(payload) {
   const body = payload && (payload.body || payload);
   return (body && (body.message || body.msg || body.error)) || (body && body.body && (body.body.message || body.body.msg || body.body.error)) || '';
-}
-function parseCookieString(cookieText) {
-  const out = {};
-  String(cookieText || '').split(';').forEach(part => {
-    const raw = String(part || '').trim();
-    if (!raw) return;
-    const idx = raw.indexOf('=');
-    if (idx <= 0) return;
-    const key = raw.slice(0, idx).trim();
-    const value = raw.slice(idx + 1).trim();
-    if (key) out[key] = value;
-  });
-  return out;
-}
-function serializeCookieObject(obj) {
-  return Object.keys(obj || {})
-    .filter(k => obj[k] != null && String(obj[k]) !== '')
-    .map(k => k + '=' + String(obj[k]))
-    .join('; ');
 }
 function qqCookieObject() {
   return parseCookieString(qqCookie);
@@ -1779,13 +1653,6 @@ async function requestJson(targetUrl, opts, body) {
     err.cause = e;
     throw err;
   }
-}
-
-function clampNumber(value, min, max, fallback) {
-  if (value === null || value === undefined || value === '') return fallback;
-  const n = Number(value);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(min, Math.min(max, n));
 }
 
 function openMeteoWeatherLabel(code) {
@@ -2237,12 +2104,6 @@ async function buildWeatherRadio(params) {
   };
 }
 
-function parseJSONText(text) {
-  const raw = String(text || '').trim();
-  const json = raw.replace(/^callback\(([\s\S]*)\);?$/, '$1');
-  return JSON.parse(json);
-}
-
 async function qqMusicRequest(payload, opts) {
   opts = opts || {};
   const body = JSON.stringify(payload);
@@ -2346,7 +2207,9 @@ function audioProxyHeadersFor(audioUrl, range) {
   try {
     const host = new URL(audioUrl).hostname.toLowerCase();
     if (host.includes('qq.com') || host.includes('qpic.cn')) headers.Referer = 'https://y.qq.com/';
-  } catch (e) {}
+  } catch (e) {
+    console.warn('[AudioProxy] Failed to parse audio URL:', audioUrl, e.message);
+  }
   if (range) headers.Range = range;
   return headers;
 }
@@ -2410,7 +2273,7 @@ function mapQQPlaylistTrack(raw) {
 }
 
 async function handleQQUserPlaylists() {
-  const info = await getQQLoginInfo();
+  const info = await qqmusic.getQQLoginInfo();
   if (!info.loggedIn || !info.userId) return { loggedIn: false, provider: 'qq', playlists: [] };
   const uin = info.userId;
   const createdReq = qqGetJSON('https://c.y.qq.com/rsc/fcgi-bin/fcg_user_created_diss', {
@@ -2451,7 +2314,7 @@ async function handleQQUserPlaylists() {
 }
 
 async function handleQQPlaylistTracks(id) {
-  const info = await getQQLoginInfo();
+  const info = await qqmusic.getQQLoginInfo();
   if (!info.loggedIn || !info.userId) return { loggedIn: false, provider: 'qq', tracks: [] };
   const pid = String(id || '').trim();
   if (!pid) return { loggedIn: true, provider: 'qq', error: 'Missing QQ playlist id', tracks: [] };
@@ -3243,10 +3106,29 @@ async function getLoginInfo() {
 //  HTTP Server
 // ====================================================================
 const server = http.createServer(async (req, res) => {
+  wireModules(); // lazy-init sub-module dependencies on first request
+
+  // --- CORS & Security headers ---
+  const safeOrigin = getSafeOrigin(req);
+  if (safeOrigin) {
+    res.setHeader('Access-Control-Allow-Origin', safeOrigin);
+    res.setHeader('Vary', 'Origin');
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+
+  // Handle CORS preflight
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
   const url = new URL(req.url, 'http://localhost:' + PORT);
   const pn = url.pathname;
 
-  if (pn === '/api/app/version') {
+  var ROUTES = {};
+  ROUTES['/api/app/version'] = async function(req, res, url) {
     sendJSON(res, {
       name: APP_PACKAGE.name || 'mineradio',
       productName: APP_PACKAGE.productName || 'Mineradio',
@@ -3260,10 +3142,9 @@ const server = http.createServer(async (req, res) => {
         manifestOverride: !!UPDATE_CONFIG.manifest,
       },
     });
-    return;
-  }
+}
 
-  if (pn === '/api/update/latest') {
+  ROUTES['/api/update/latest'] = async function(req, res, url) {
     try {
       sendJSON(res, await fetchLatestUpdateInfo());
     } catch (err) {
@@ -3272,10 +3153,9 @@ const server = http.createServer(async (req, res) => {
         error: err.message || 'Update check failed',
       });
     }
-    return;
-  }
+}
 
-  if (pn === '/api/update/download') {
+  ROUTES['/api/update/download'] = async function(req, res, url) {
     try {
       const info = await fetchLatestUpdateInfo();
       const job = startUpdateDownloadJob(info);
@@ -3284,19 +3164,17 @@ const server = http.createServer(async (req, res) => {
       console.error('[UpdateDownload]', err);
       sendJSON(res, { ok: false, error: err.message || 'UPDATE_DOWNLOAD_START_FAILED' }, 500);
     }
-    return;
-  }
+}
 
-  if (pn === '/api/update/download/status') {
+  ROUTES['/api/update/download/status'] = async function(req, res, url) {
     const id = url.searchParams.get('id') || '';
     const job = id
       ? updateDownloadJobs.get(id)
       : Array.from(updateDownloadJobs.values()).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0];
     sendJSON(res, publicUpdateJob(job), job ? 200 : 404);
-    return;
-  }
+}
 
-  if (pn === '/api/update/patch') {
+  ROUTES['/api/update/patch'] = async function(req, res, url) {
     try {
       const info = await fetchLatestUpdateInfo();
       const job = startUpdatePatchJob(info);
@@ -3305,31 +3183,26 @@ const server = http.createServer(async (req, res) => {
       console.error('[UpdatePatch]', err);
       sendJSON(res, { ok: false, error: err.message || 'UPDATE_PATCH_START_FAILED' }, 500);
     }
-    return;
-  }
+}
 
-  if (pn === '/api/update/patch/status') {
+  ROUTES['/api/update/patch/status'] = async function(req, res, url) {
     const id = url.searchParams.get('id') || '';
     const job = id
       ? updateDownloadJobs.get(id)
       : Array.from(updateDownloadJobs.values()).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).find(item => item.mode === 'patch');
     sendJSON(res, publicUpdateJob(job), job ? 200 : 404);
-    return;
-  }
+}
 
-  if (pn === '/api/beatmap/cache/status') {
+  ROUTES['/api/beatmap/cache/status'] = async function(req, res, url) {
     const info = beatCacheRootInfo();
     sendJSON(res, {
-      enabled: info.allowed && info.available,
+      enabled: true,
       dir: info.dir,
-      drive: info.drive,
-      reason: !info.allowed ? 'C_DRIVE_DISABLED' : (!info.available ? 'TARGET_DRIVE_UNAVAILABLE' : ''),
-      mode: info.allowed && info.available ? 'disk' : 'memory-only',
+      mode: 'disk',
     });
-    return;
-  }
+}
 
-  if (pn === '/api/beatmap/cache') {
+  ROUTES['/api/beatmap/cache'] = async function(req, res, url) {
     if (req.method === 'GET') {
       const key = url.searchParams.get('key') || '';
       try {
@@ -3349,8 +3222,7 @@ const server = http.createServer(async (req, res) => {
           dir: info.dir,
         });
       }
-      return;
-    }
+}
 
     if (req.method === 'POST') {
       try {
@@ -3366,26 +3238,23 @@ const server = http.createServer(async (req, res) => {
           dir: info.dir,
         });
       }
-      return;
-    }
+}
 
     sendJSON(res, { ok: false, error: 'METHOD_NOT_ALLOWED' }, 405);
-    return;
-  }
+}
 
-  if (pn === '/api/discover/home') {
+  ROUTES['/api/discover/home'] = async function(req, res, url) {
     try {
       sendJSON(res, await handleDiscoverHome());
     } catch (err) {
       console.error('[DiscoverHome]', err);
       sendJSON(res, { error: err.message, loggedIn: false, dailySongs: [], playlists: [], podcasts: [] }, 500);
     }
-    return;
-  }
+}
 
-  if (pn === '/api/weather/radio') {
+  ROUTES['/api/weather/radio'] = async function(req, res, url) {
     try {
-      const data = await buildWeatherRadio({
+      const data = await weatherModule.buildWeatherRadio({
         city: url.searchParams.get('city') || url.searchParams.get('q') || '',
         lat: url.searchParams.get('lat'),
         lon: url.searchParams.get('lon'),
@@ -3401,133 +3270,122 @@ const server = http.createServer(async (req, res) => {
         radio: { title: '天气电台', subtitle: '天气暂时没有回来，可以先听今日推荐。', seedQueries: [], songs: [] },
       }, 500);
     }
-    return;
-  }
+}
 
-  if (pn === '/api/weather/ip-location') {
+  ROUTES['/api/weather/ip-location'] = async function(req, res, url) {
     try {
-      sendJSON(res, { ok: true, location: await fetchIpWeatherLocation() });
+      sendJSON(res, { ok: true, location: await weatherModule.fetchIpWeatherLocation() });
     } catch (err) {
       console.error('[WeatherIpLocation]', err);
       sendJSON(res, { ok: false, error: err.message, location: null }, 500);
     }
-    return;
-  }
+}
 
   // ---------- 搜索 ----------
-  if (pn === '/api/search') {
+  ROUTES['/api/search'] = async function(req, res, url) {
     try {
       const kw    = url.searchParams.get('keywords') || '';
       const limit = parseInt(url.searchParams.get('limit') || '20');
       const songs = await handleSearch(kw, limit);
       sendJSON(res, { songs });
     } catch (err) { console.error('[Search]', err); sendJSON(res, { error: err.message, songs: [] }, 500); }
-    return;
-  }
+}
 
-  if (pn === '/api/qq/search') {
+  ROUTES['/api/qq/search'] = async function(req, res, url) {
     try {
       const kw = url.searchParams.get('keywords') || '';
       const limit = Math.max(4, Math.min(12, parseInt(url.searchParams.get('limit') || '8', 10) || 8));
-      const songs = await handleQQSearch(kw, limit);
+      const songs = await qqmusic.handleQQSearch(kw, limit);
       sendJSON(res, { provider: 'qq', songs });
     } catch (err) {
       console.error('[QQSearch]', err);
       sendJSON(res, { provider: 'qq', error: err.message, songs: [] }, 500);
     }
-    return;
-  }
+}
 
-  if (pn === '/api/qq/song/url') {
+  ROUTES['/api/qq/song/url'] = async function(req, res, url) {
     try {
       const mid = url.searchParams.get('mid') || url.searchParams.get('id') || '';
       const mediaMid = url.searchParams.get('mediaMid') || url.searchParams.get('media_mid') || '';
       const quality = url.searchParams.get('quality') || '';
-      const info = await handleQQSongUrl(mid, mediaMid, quality);
+      const info = await qqmusic.handleQQSongUrl(mid, mediaMid, quality);
       sendJSON(res, info);
     } catch (err) {
       console.error('[QQSongUrl]', err);
       sendJSON(res, { provider: 'qq', url: '', playable: false, error: err.message }, 500);
     }
-    return;
-  }
+}
 
-  if (pn === '/api/qq/lyric') {
+  ROUTES['/api/qq/lyric'] = async function(req, res, url) {
     try {
       const mid = url.searchParams.get('mid') || url.searchParams.get('songmid') || '';
       const id = url.searchParams.get('id') || url.searchParams.get('qqId') || '';
       if (!mid && !id) { sendJSON(res, { provider: 'qq', error: 'Missing QQ song mid or id', lyric: '' }, 400); return; }
-      const data = await handleQQLyric(mid, id);
+      const data = await qqmusic.handleQQLyric(mid, id);
       sendJSON(res, data);
     } catch (err) {
       console.error('[QQLyric]', err);
       sendJSON(res, { provider: 'qq', error: err.message, lyric: '' }, 500);
     }
-    return;
-  }
+}
 
   // ---------- 歌曲URL ----------
-  if (pn === '/api/qq/login/status') {
+  ROUTES['/api/qq/login/status'] = async function(req, res, url) {
     try {
-      const info = await getQQLoginInfo();
+      const info = await qqmusic.getQQLoginInfo();
       sendJSON(res, info);
     } catch (err) {
       console.error('[QQLoginStatus]', err);
       sendJSON(res, { provider: 'qq', loggedIn: false, error: err.message }, 500);
     }
-    return;
-  }
+}
 
-  if (pn === '/api/qq/login/cookie') {
+  ROUTES['/api/qq/login/cookie'] = async function(req, res, url) {
     try {
       const body = await readRequestBody(req);
       const raw = body.cookie || body.data || body.text || '';
-      const normalized = normalizeQQCookieInput(raw);
+      const normalized = normalizeCookieHeader(raw);
       const obj = parseCookieString(normalized);
-      if (!qqCookieUin(obj) || !qqCookieMusicKey(obj)) {
+      if (!qqmusic.qqCookieUin(obj) || !qqmusic.qqCookieMusicKey(obj)) {
         sendJSON(res, { provider: 'qq', loggedIn: false, error: 'INVALID_QQ_COOKIE', message: 'QQ cookie 缺少 uin 或有效登录票据' }, 400);
         return;
       }
-      saveQQCookie(normalized);
-      const info = await getQQLoginInfo();
+      qqmusic.setQQCookie(normalized);
+      const info = await qqmusic.getQQLoginInfo();
       sendJSON(res, { ...info, saved: true });
     } catch (err) {
       console.error('[QQLoginCookie]', err);
       sendJSON(res, { provider: 'qq', loggedIn: false, error: err.message }, 500);
     }
-    return;
-  }
+}
 
-  if (pn === '/api/qq/logout') {
-    saveQQCookie('');
+  ROUTES['/api/qq/logout'] = async function(req, res, url) {
+    qqmusic.setQQCookie('');
     sendJSON(res, { provider: 'qq', ok: true, loggedIn: false });
-    return;
-  }
+}
 
-  if (pn === '/api/qq/user/playlists') {
+  ROUTES['/api/qq/user/playlists'] = async function(req, res, url) {
     try {
-      const data = await handleQQUserPlaylists();
+      const data = await qqmusic.handleQQUserPlaylists();
       sendJSON(res, data);
     } catch (err) {
       console.error('[QQUserPlaylists]', err);
       sendJSON(res, { provider: 'qq', loggedIn: false, error: err.message, playlists: [] }, 500);
     }
-    return;
-  }
+}
 
-  if (pn === '/api/qq/playlist/tracks') {
+  ROUTES['/api/qq/playlist/tracks'] = async function(req, res, url) {
     try {
       const id = url.searchParams.get('id') || url.searchParams.get('disstid') || '';
-      const data = await handleQQPlaylistTracks(id);
+      const data = await qqmusic.handleQQPlaylistTracks(id);
       sendJSON(res, data);
     } catch (err) {
       console.error('[QQPlaylistTracks]', err);
       sendJSON(res, { provider: 'qq', error: err.message, tracks: [] }, 500);
     }
-    return;
-  }
+}
 
-  if (pn === '/api/qq/artist/detail') {
+  ROUTES['/api/qq/artist/detail'] = async function(req, res, url) {
     try {
       const mid = url.searchParams.get('mid') || url.searchParams.get('singermid') || '';
       const limit = Math.max(10, Math.min(80, parseInt(url.searchParams.get('limit') || '36', 10) || 36));
@@ -3535,31 +3393,29 @@ const server = http.createServer(async (req, res) => {
         sendJSON(res, { provider: 'qq', error: 'MISSING_SINGER_MID', artist: null, songs: [] }, 400);
         return;
       }
-      const data = await handleQQArtistDetail(mid, limit);
+      const data = await qqmusic.handleQQArtistDetail(mid, limit);
       sendJSON(res, data);
     } catch (err) {
       console.error('[QQArtistDetail]', err);
       sendJSON(res, { provider: 'qq', error: err.message, artist: null, songs: [] }, 500);
     }
-    return;
-  }
+}
 
-  if (pn === '/api/qq/song/comments') {
+  ROUTES['/api/qq/song/comments'] = async function(req, res, url) {
     try {
       const id = url.searchParams.get('id') || url.searchParams.get('qqId') || '';
       const mid = url.searchParams.get('mid') || url.searchParams.get('songmid') || '';
       const limit = Math.max(6, Math.min(50, parseInt(url.searchParams.get('limit') || '20', 10) || 20));
       const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10) || 0);
-      const data = await handleQQSongComments(id, mid, limit, offset);
+      const data = await qqmusic.handleQQSongComments(id, mid, limit, offset);
       sendJSON(res, data);
     } catch (err) {
       console.error('[QQSongComments]', err);
       sendJSON(res, { provider: 'qq', error: err.message, comments: [] }, 500);
     }
-    return;
-  }
+}
 
-  if (pn === '/api/podcast/search') {
+  ROUTES['/api/podcast/search'] = async function(req, res, url) {
     try {
       const kw = String(url.searchParams.get('keywords') || '').trim();
       const limit = Math.max(6, Math.min(30, parseInt(url.searchParams.get('limit') || '18', 10) || 18));
@@ -3567,47 +3423,44 @@ const server = http.createServer(async (req, res) => {
       const r = await cloudsearch({ keywords: kw, type: 1009, limit, cookie: userCookie, timestamp: Date.now() });
       const result = (r.body && r.body.result) || {};
       const raw = result.djRadios || result.djradios || result.radios || [];
-      const podcasts = raw.map(mapPodcastRadio).filter(p => p.id);
+      const podcasts = raw.map(podcastModule.mapPodcastRadio).filter(p => p.id);
       sendJSON(res, { podcasts, total: result.djRadiosCount || result.djradiosCount || podcasts.length });
     } catch (err) {
       console.error('[PodcastSearch]', err);
       sendJSON(res, { error: err.message, podcasts: [] }, 500);
     }
-    return;
-  }
+}
 
-  if (pn === '/api/podcast/hot') {
+  ROUTES['/api/podcast/hot'] = async function(req, res, url) {
     try {
       const limit = Math.max(6, Math.min(30, parseInt(url.searchParams.get('limit') || '18', 10) || 18));
       const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10) || 0);
       const r = await dj_hot({ limit, offset, cookie: userCookie, timestamp: Date.now() });
       const body = r.body || {};
       const raw = body.djRadios || body.djradios || body.radios || body.data || [];
-      const podcasts = (Array.isArray(raw) ? raw : []).map(mapPodcastRadio).filter(p => p.id);
+      const podcasts = (Array.isArray(raw) ? raw : []).map(podcastModule.mapPodcastRadio).filter(p => p.id);
       sendJSON(res, { podcasts, more: !!body.hasMore });
     } catch (err) {
       console.error('[PodcastHot]', err);
       sendJSON(res, { error: err.message, podcasts: [] }, 500);
     }
-    return;
-  }
+}
 
-  if (pn === '/api/podcast/detail') {
+  ROUTES['/api/podcast/detail'] = async function(req, res, url) {
     try {
       const rid = url.searchParams.get('id') || url.searchParams.get('rid');
       if (!rid) { sendJSON(res, { error: 'Missing podcast id' }, 400); return; }
       const r = await dj_detail({ rid, cookie: userCookie, timestamp: Date.now() });
       const body = r.body || {};
-      const radio = mapPodcastRadio(body.data || body.djRadio || body.radio || body);
+      const radio = podcastModule.mapPodcastRadio(body.data || body.djRadio || body.radio || body);
       sendJSON(res, { podcast: radio });
     } catch (err) {
       console.error('[PodcastDetail]', err);
       sendJSON(res, { error: err.message }, 500);
     }
-    return;
-  }
+}
 
-  if (pn === '/api/podcast/programs') {
+  ROUTES['/api/podcast/programs'] = async function(req, res, url) {
     try {
       const rid = url.searchParams.get('id') || url.searchParams.get('rid');
       if (!rid) { sendJSON(res, { error: 'Missing podcast id', programs: [] }, 400); return; }
@@ -3616,30 +3469,29 @@ const server = http.createServer(async (req, res) => {
       const r = await dj_program({ rid, limit, offset, asc: false, cookie: userCookie, timestamp: Date.now() });
       const body = r.body || {};
       const raw = body.programs || (body.data && (body.data.list || body.data.programs)) || [];
-      const radio = raw[0] && raw[0].radio ? mapPodcastRadio(raw[0].radio) : { id: rid, rid };
+      const radio = raw[0] && raw[0].radio ? podcastModule.mapPodcastRadio(raw[0].radio) : { id: rid, rid };
       const programs = (Array.isArray(raw) ? raw : [])
-        .map(p => mapPodcastProgram(p, radio))
+        .map(p => podcastModule.mapPodcastProgram(p, radio))
         .filter(p => p.id && p.name);
       sendJSON(res, { radio, programs, more: !!body.more, total: body.count || programs.length });
     } catch (err) {
       console.error('[PodcastPrograms]', err);
       sendJSON(res, { error: err.message, programs: [] }, 500);
     }
-    return;
-  }
+}
 
-  if (pn === '/api/podcast/my') {
+  ROUTES['/api/podcast/my'] = async function(req, res, url) {
     try {
       const info = await getLoginInfo();
       if (!info.loggedIn || !info.userId) {
-        const empty = ['collect', 'created', 'liked'].map(k => podcastCollectionMeta(k, []));
+        const empty = ['collect', 'created', 'liked'].map(k => podcastModule.podcastCollectionMeta(k, []));
         sendJSON(res, { loggedIn: false, collections: empty });
         return;
       }
       const keys = ['collect', 'created', 'liked'];
       const collections = await Promise.all(keys.map(async key => {
         try {
-          const data = await fetchMyPodcastItems(key, info, 12, 0);
+          const data = await podcastModule.fetchMyPodcastItems(key, info, 12, 0);
           return podcastCollectionMeta(key, data.items || []);
         } catch (e) {
           console.warn('[MyPodcast]', key, e.message);
@@ -3651,26 +3503,24 @@ const server = http.createServer(async (req, res) => {
       console.error('[MyPodcast]', err);
       sendJSON(res, { error: err.message, collections: [] }, 500);
     }
-    return;
-  }
+}
 
-  if (pn === '/api/podcast/my/items') {
+  ROUTES['/api/podcast/my/items'] = async function(req, res, url) {
     try {
       const info = await getLoginInfo();
       if (!info.loggedIn || !info.userId) { sendJSON(res, { loggedIn: false, items: [] }); return; }
       const key = String(url.searchParams.get('key') || 'collect');
       const limit = parseInt(url.searchParams.get('limit') || '36', 10) || 36;
       const offset = parseInt(url.searchParams.get('offset') || '0', 10) || 0;
-      const data = await fetchMyPodcastItems(key, info, limit, offset);
+      const data = await podcastModule.fetchMyPodcastItems(key, info, limit, offset);
       sendJSON(res, { loggedIn: true, key, ...podcastCollectionMeta(key, data.items || []), itemType: data.itemType, items: data.items || [] });
     } catch (err) {
       console.error('[MyPodcastItems]', err);
       sendJSON(res, { error: err.message, items: [] }, 500);
     }
-    return;
-  }
+}
 
-  if (pn === '/api/song/url') {
+  ROUTES['/api/song/url'] = async function(req, res, url) {
     try {
       const sid = url.searchParams.get('id');
       const quality = url.searchParams.get('quality') || '';
@@ -3686,10 +3536,9 @@ const server = http.createServer(async (req, res) => {
         vipLabel: loginInfo.vipLabel || '无VIP',
       });
     } catch (err) { console.error('[SongUrl]', err); sendJSON(res, { error: err.message }, 500); }
-    return;
-  }
+}
 
-  if (pn === '/api/login/cookie') {
+  ROUTES['/api/login/cookie'] = async function(req, res, url) {
     try {
       const body = await readRequestBody(req);
       const raw = body.cookie || body.data || body.text || '';
@@ -3719,12 +3568,11 @@ const server = http.createServer(async (req, res) => {
       console.error('[LoginCookie]', err);
       sendJSON(res, { loggedIn: false, error: err.message }, 500);
     }
-    return;
-  }
+}
 
   // ---------- 登录: QR Key ----------
   // ---------- 播客 DJ 长音频后端离线锁拍 ----------
-  if (pn === '/api/podcast/dj-beatmap') {
+  ROUTES['/api/podcast/dj-beatmap'] = async function(req, res, url) {
     try {
       const audioUrl = url.searchParams.get('url');
       const durationSec = Math.max(0, Number(url.searchParams.get('duration') || 0) || 0);
@@ -3744,31 +3592,28 @@ const server = http.createServer(async (req, res) => {
       console.error('[PodcastDjBeatmap]', err);
       sendJSON(res, { ok: false, error: err.message || String(err) }, 500);
     }
-    return;
-  }
+}
 
-  if (pn === '/api/login/qr/key') {
+  ROUTES['/api/login/qr/key'] = async function(req, res, url) {
     try {
       const r = await login_qr_key({ timestamp: Date.now() });
       const key = r.body && r.body.data && r.body.data.unikey;
       sendJSON(res, { key });
     } catch (err) { sendJSON(res, { error: err.message }, 500); }
-    return;
-  }
+}
 
   // ---------- 登录: QR 二维码图片 ----------
-  if (pn === '/api/login/qr/create') {
+  ROUTES['/api/login/qr/create'] = async function(req, res, url) {
     try {
       const key = url.searchParams.get('key');
       const r = await login_qr_create({ key, qrimg: true, timestamp: Date.now() });
       const d = r.body && r.body.data;
       sendJSON(res, { img: d && d.qrimg, url: d && d.qrurl });
     } catch (err) { sendJSON(res, { error: err.message }, 500); }
-    return;
-  }
+}
 
   // ---------- 登录: 轮询扫码状态 ----------
-  if (pn === '/api/login/qr/check') {
+  ROUTES['/api/login/qr/check'] = async function(req, res, url) {
     try {
       const key = url.searchParams.get('key');
       let r = await login_qr_check({ key, noCookie: true, timestamp: Date.now() });
@@ -3817,26 +3662,25 @@ const server = http.createServer(async (req, res) => {
       }
       sendJSON(res, { code, message: msg, nickname: body.nickname, avatar: body.avatarUrl });
     } catch (err) { sendJSON(res, { error: err.message }, 500); }
-    return;
-  }
+}
 
   // ---------- 登录态查询 ----------
-  if (pn === '/api/login/status') {
+  ROUTES['/api/login/status'] = async function(req, res, url) {
     const info = await getLoginInfo();
     sendJSON(res, info);
-    return;
-  }
+}
 
   // ---------- 登出 ----------
-  if (pn === '/api/logout') {
-    try { await logout({ cookie: userCookie }); } catch (e) {}
+  ROUTES['/api/logout'] = async function(req, res, url) {
+    try { await logout({ cookie: userCookie }); } catch (e) {
+      console.warn('[Logout] Netease logout request failed:', e.message);
+    }
     saveCookie('');
     sendJSON(res, { ok: true });
-    return;
-  }
+}
 
   // ---------- 用户歌单 ----------
-  if (pn === '/api/user/playlists') {
+  ROUTES['/api/user/playlists'] = async function(req, res, url) {
     try {
       const info = await getLoginInfo();
       if (!info.loggedIn || !info.userId) { sendJSON(res, { loggedIn: false, playlists: [] }); return; }
@@ -3857,11 +3701,10 @@ const server = http.createServer(async (req, res) => {
       console.error('[UserPlaylists]', err);
       sendJSON(res, { error: err.message, loggedIn: false, playlists: [] }, 500);
     }
-    return;
-  }
+}
 
   // ---------- 红心状态 ----------
-  if (pn === '/api/song/like/check') {
+  ROUTES['/api/song/like/check'] = async function(req, res, url) {
     try {
       const info = await requireLogin(res);
       if (!info) return;
@@ -3897,11 +3740,10 @@ const server = http.createServer(async (req, res) => {
       console.error('[LikeCheck]', err);
       sendJSON(res, { error: err.message }, 500);
     }
-    return;
-  }
+}
 
   // ---------- 红心/取消红心 ----------
-  if (pn === '/api/song/like') {
+  ROUTES['/api/song/like'] = async function(req, res, url) {
     try {
       const info = await requireLogin(res);
       if (!info) return;
@@ -3916,11 +3758,10 @@ const server = http.createServer(async (req, res) => {
       console.error('[Like]', err);
       sendJSON(res, { error: err.message }, 500);
     }
-    return;
-  }
+}
 
   // ---------- 创建歌单 ----------
-  if (pn === '/api/playlist/create') {
+  ROUTES['/api/playlist/create'] = async function(req, res, url) {
     try {
       const info = await requireLogin(res);
       if (!info) return;
@@ -3935,11 +3776,10 @@ const server = http.createServer(async (req, res) => {
       console.error('[PlaylistCreate]', err);
       sendJSON(res, { error: err.message }, 500);
     }
-    return;
-  }
+}
 
   // ---------- 收藏歌曲到歌单 ----------
-  if (pn === '/api/playlist/add-song') {
+  ROUTES['/api/playlist/add-song'] = async function(req, res, url) {
     try {
       const info = await requireLogin(res);
       if (!info) return;
@@ -3986,11 +3826,10 @@ const server = http.createServer(async (req, res) => {
       console.error('[PlaylistAddSong]', err);
       sendJSON(res, { error: err.message }, 500);
     }
-    return;
-  }
+}
 
   // ---------- 歌词 ----------
-  if (pn === '/api/lyric') {
+  ROUTES['/api/lyric'] = async function(req, res, url) {
     try {
       const id = url.searchParams.get('id');
       if (!id) { sendJSON(res, { error: 'Missing song id', lyric: '' }, 400); return; }
@@ -4020,11 +3859,10 @@ const server = http.createServer(async (req, res) => {
       console.error('[Lyric]', err);
       sendJSON(res, { error: err.message, lyric: '' }, 500);
     }
-    return;
-  }
+}
 
   // ---------- 歌曲评论 ----------
-  if (pn === '/api/song/comments') {
+  ROUTES['/api/song/comments'] = async function(req, res, url) {
     try {
       const id = url.searchParams.get('id');
       const limit = Math.max(6, Math.min(50, parseInt(url.searchParams.get('limit') || '20', 10) || 20));
@@ -4045,11 +3883,10 @@ const server = http.createServer(async (req, res) => {
       console.error('[SongComments]', err);
       sendJSON(res, { error: err.message, comments: [] }, 500);
     }
-    return;
-  }
+}
 
   // ---------- 歌手主页 / 热门歌曲 ----------
-  if (pn === '/api/artist/detail') {
+  ROUTES['/api/artist/detail'] = async function(req, res, url) {
     try {
       const id = url.searchParams.get('id');
       const limit = Math.max(10, Math.min(80, parseInt(url.searchParams.get('limit') || '30', 10) || 30));
@@ -4093,11 +3930,10 @@ const server = http.createServer(async (req, res) => {
       console.error('[ArtistDetail]', err);
       sendJSON(res, { error: err.message, songs: [] }, 500);
     }
-    return;
-  }
+}
 
   // ---------- 歌单曲目详情 ----------
-  if (pn === '/api/playlist/tracks') {
+  ROUTES['/api/playlist/tracks'] = async function(req, res, url) {
     try {
       const id = url.searchParams.get('id');
       if (!id) { sendJSON(res, { error: 'Missing playlist id', tracks: [] }, 400); return; }
@@ -4130,8 +3966,10 @@ const server = http.createServer(async (req, res) => {
       console.error('[PlaylistTracks]', err);
       sendJSON(res, { error: err.message, tracks: [] }, 500);
     }
-    return;
-  }
+}
+
+  var handler = ROUTES[pn];
+  if (handler) { await handler(req, res, url); return; }
 
   // ---------- 封面代理 (带 CORS 头, 给 canvas 提取像素用) ----------
   if (pn === '/api/cover') {
@@ -4139,7 +3977,9 @@ const server = http.createServer(async (req, res) => {
       const coverUrl = url.searchParams.get('url');
       // URL 校验: 必须是 http(s) 开头, 否则直接 404 (不要让 fetch 抛错)
       if (!coverUrl || !/^https?:\/\//i.test(coverUrl)) {
-        res.writeHead(400, { 'Access-Control-Allow-Origin': '*' });
+        const errHdr = {};
+        if (safeOrigin) errHdr['Access-Control-Allow-Origin'] = safeOrigin;
+        res.writeHead(400, errHdr);
         res.end('Invalid cover url');
         return;
       }
@@ -4148,15 +3988,26 @@ const server = http.createServer(async (req, res) => {
       const cl  = resp.headers.get('content-length');
       const hdr = {
         'Content-Type': ct,
-        'Access-Control-Allow-Origin': '*',
         'Cross-Origin-Resource-Policy': 'cross-origin',
         'Cache-Control': 'public, max-age=86400',
       };
+      if (safeOrigin) hdr['Access-Control-Allow-Origin'] = safeOrigin;
       if (cl) hdr['Content-Length'] = cl;
       res.writeHead(resp.status, hdr);
-      const reader = resp.body.getReader();
-      while (true) { const c = await reader.read(); if (c.done) break; res.write(c.value); }
-      res.end();
+      // Stream cover image with backpressure handling
+      const coverReader = resp.body.getReader();
+      try {
+        while (true) {
+          const { done, value } = await coverReader.read();
+          if (done) break;
+          if (value && !res.write(value)) {
+            await new Promise(resolve => res.once('drain', resolve));
+          }
+        }
+        res.end();
+      } catch (streamErr) {
+        if (!res.writableEnded) res.destroy();
+      }
     } catch (err) { console.error('[Cover]', err); res.writeHead(500); res.end(); }
     return;
   }
@@ -4171,33 +4022,44 @@ const server = http.createServer(async (req, res) => {
       const up = await fetch(audioUrl, { headers: hdr });
       const out = {
         'Content-Type': audioContentTypeForUrl(audioUrl, up.headers.get('content-type')),
-        'Access-Control-Allow-Origin': '*',
         'Accept-Ranges': 'bytes',
       };
+      if (safeOrigin) out['Access-Control-Allow-Origin'] = safeOrigin;
       const cl = up.headers.get('content-length'); if (cl) out['Content-Length'] = cl;
       const cr = up.headers.get('content-range');  if (cr) out['Content-Range']  = cr;
       res.writeHead(up.status, out);
-      const reader = up.body.getReader();
-      while (true) { const c = await reader.read(); if (c.done) break; res.write(c.value); }
-      res.end();
+      // Stream audio with backpressure handling
+      const audioReader = up.body.getReader();
+      try {
+        while (true) {
+          const { done, value } = await audioReader.read();
+          if (done) break;
+          if (value && !res.write(value)) {
+            await new Promise(resolve => res.once('drain', resolve));
+          }
+        }
+        res.end();
+      } catch (streamErr) {
+        if (!res.writableEnded) res.destroy();
+      }
     } catch (err) { console.error('[Audio]', err); res.writeHead(500); res.end(); }
     return;
   }
 
   // ---------- 静态资源 ----------
   if (pn === '/favicon.ico') {
-    serveStatic(res, path.join(__dirname, 'build', 'icon.ico'));
+    serveStatic(res, path.join(__dirname, 'build', 'icon.ico'), req);
     return;
   }
 
   let filePath = pn === '/' ? '/index.html' : pn;
   filePath = path.join(__dirname, 'public', filePath);
-  serveStatic(res, filePath);
+  serveStatic(res, filePath, req);
 });
 
 server.listen(PORT, HOST, () => {
   console.log('======================================================');
-  console.log(' 粒子音乐可视化 v2  →  http://localhost:' + PORT);
+  console.log(' Mineradio-MacOS v1.3  →  http://localhost:' + PORT);
   console.log(' 登录态: ' + (userCookie ? '已登录(cookie已加载)' : '未登录'));
   console.log('======================================================');
 });
