@@ -25,6 +25,7 @@
       "public/**/*",
       "build/**/*",
       "server.js",
+      "server/**/*",
       "dj-analyzer.js",
       "bilibili-api.js",
       "kugou-api.js",
