@@ -13,7 +13,7 @@
 - `.cookie`、`.qq-cookie`、`updates/`、`node_modules/`、旧 `dist/` 未进入 git
 - `npm test` 100 项全部通过
 - `node --check server.js` 语法检查通过
-- 执行 `npm run build:mac` 或 `npm run build:win` 生成安装包
+- 执行 `npm run build:mac` 生成 macOS 安装包（arm64 + x64）
 - 生成并记录 SHA256
 
 ## GitHub Release
@@ -25,7 +25,6 @@ Assets: Mineradio-MacOS-1.3.0-mac-arm64.dmg
         Mineradio-MacOS-1.3.0-mac-x64.dmg
         Mineradio-MacOS-1.3.0-mac-arm64.zip
         Mineradio-MacOS-1.3.0-mac-x64.zip
-        Mineradio-MacOS-1.3.0-Setup.exe (Windows)
         latest-mac.yml
         SHA256SUMS.txt
 ```

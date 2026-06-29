@@ -26,7 +26,6 @@ npm install
 npm start                  # 开发运行
 npm test                   # 100 项单元测试
 npm run build:mac          # macOS DMG + ZIP
-npm run build:win          # Windows NSIS 安装包
 ```
 
 桌面版入口由 Electron 主进程加载本地 HTTP 服务，构建产物位于 `dist/`。
@@ -35,8 +34,7 @@ npm run build:win          # Windows NSIS 安装包
 
 从 `dist/` 中获取对应平台的安装包：
 
-- **macOS**：打开 `.dmg`，将 Mineradio-MacOS 拖入 Applications 文件夹
-- **Windows**：运行 `.exe` 安装程序
+- **macOS**：打开 `.dmg`，将 Mineradio-MacOS 拖入 Applications 文件夹。支持 Apple Silicon (arm64) 和 Intel (x64)。
 
 > **首次打开提示**：由于应用未经过 Apple 付费开发者签名，macOS 首次打开时会提示"无法验证开发者"。
 > 请**右键（或 Control+点击）Mineradio-MacOS → 选择"打开" → 在弹出的对话框中再次点击"打开"**。
@@ -54,16 +52,9 @@ Electron 33 + Node.js HTTP Server + Three.js r128
 └── 测试: 100 项 (utils / weather / dj-analyzer)
 ```
 
-## 平台兼容
+## 平台
 
-| 功能 | macOS | Windows | Linux |
-|------|-------|---------|-------|
-| 核心播放/搜索/可视化 | ✅ | ✅ | ✅ |
-| 桌面歌词中键穿透 | ✅ (Swift) | ❌ | ❌ |
-| 媒体键 (MPNowPlaying) | ✅ (Swift) | ✅ (globalShortcut) | ✅ |
-| 壁纸模式 | ✅ | ✅ (WorkerW) | ❌ |
-| DMG/ZIP 打包 | ✅ | — | — |
-| NSIS 安装包 | — | ✅ | — |
+仅支持 macOS（Apple Silicon + Intel），主要功能依赖 Swift 原生辅助程序和 Metal 渲染。
 
 ## 更新机制
 

@@ -52,7 +52,6 @@ Mineradio-MacOS/
 npm start                   # 开发运行
 npm test                    # 100 项测试
 npm run build:mac           # macOS DMG+ZIP
-npm run build:win           # Windows NSIS
 ```
 
 ## Release Workflow
@@ -60,7 +59,7 @@ npm run build:win           # Windows NSIS
 1. 更新 `package.json` 版本号
 2. 更新 `CHANGELOG.md`
 3. `npm test` 确认 100/100
-4. `npm run build:mac` 或 `build:win`
+4. `npm run build:mac`
 5. 创建 GitHub Release `vX.Y.Z`
 3. 运行语法/空白检查。
 4. 执行 `npm run build:win`。
