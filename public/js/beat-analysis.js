@@ -690,8 +690,14 @@ function ensureMusicTempo() {
       return resp.text();
     })
     .then(function(code){
-      (0, eval)(code);
-      return window.MusicTempo || null;
+      return new Promise(function(resolve, reject) {
+        var s = document.createElement('script');
+        s.textContent = code;
+        s.onload = function() { resolve(window.MusicTempo || null); };
+        s.onerror = function() { reject(new Error('music-tempo script execution failed')); };
+        document.head.appendChild(s);
+        s.remove();
+      });
     })
     .catch(function(err){
       console.warn('music-tempo dynamic load failed:', err);

@@ -221,11 +221,15 @@ function serializeCookieObject(obj) {
 }
 
 function readRequestBody(req) {
-  return new Promise(resolve => {
+  return new Promise((resolve, reject) => {
     let raw = '';
     req.on('data', chunk => {
       raw += chunk;
-      if (raw.length > 8 * 1024 * 1024) req.destroy();
+      if (raw.length > 8 * 1024 * 1024) {
+        req.destroy();
+        reject(Object.assign(new Error('Request body too large'), { statusCode: 413 }));
+        return;
+      }
     });
     req.on('end', () => {
       if (!raw) { resolve({}); return; }
@@ -237,7 +241,10 @@ function readRequestBody(req) {
         resolve(out);
       }
     });
-    req.on('error', () => resolve({}));
+    req.on('error', (err) => {
+      // Distinguish network errors from empty bodies
+      resolve(Object.assign({}, { _bodyError: err && err.message || 'stream error' }));
+    });
   });
 }
 

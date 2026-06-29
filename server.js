@@ -1044,7 +1044,7 @@ function startUpdateDownloadJob(info) {
   };
   updateDownloadJobs.set(job.id, job);
   trimUpdateJobs();
-  downloadUpdateAssetWithMirrors(job);
+  downloadUpdateAssetWithMirrors(job).catch((e) => console.error('[Update]', job.id, 'auto-download failed:', e.message));
   return publicUpdateJob(job);
 }
 function safePatchRelativePath(value) {
@@ -1283,7 +1283,7 @@ function startUpdatePatchJob(info) {
   };
   updateDownloadJobs.set(job.id, job);
   trimUpdateJobs();
-  downloadAndApplyPatchWithMirrors(job);
+  downloadAndApplyPatchWithMirrors(job).catch((e) => console.error('[Update]', job.id, 'auto-patch failed:', e.message));
   return publicUpdateJob(job);
 }
 function normalizeApiCode(payload) {
@@ -3576,8 +3576,8 @@ const server = http.createServer(async (req, res) => {
     try {
       const audioUrl = url.searchParams.get('url');
       const durationSec = Math.max(0, Number(url.searchParams.get('duration') || 0) || 0);
-      if (!audioUrl || !/^https?:\/\//i.test(audioUrl)) {
-        sendJSON(res, { error: 'Invalid audio url' }, 400);
+      if (!audioUrl || !/^https?:\/\//i.test(audioUrl) || !isSafeProxyUrl(audioUrl)) {
+        sendJSON(res, { error: 'Invalid or forbidden audio url' }, 400);
         return;
       }
       console.log('[PodcastDjBeatmap] start', Math.round(durationSec || 0) + 's');
@@ -3971,12 +3971,32 @@ const server = http.createServer(async (req, res) => {
   var handler = ROUTES[pn];
   if (handler) { await handler(req, res, url); return; }
 
+  // ---------- SSRF 防护: 检查目标地址是否安全 ----------
+  function isSafeProxyUrl(targetUrl) {
+    if (!targetUrl || !/^https?:\/\//i.test(targetUrl)) return false;
+    try {
+      const u = new URL(targetUrl);
+      // 阻止内网地址和敏感主机
+      const host = u.hostname.toLowerCase();
+      if (!host) return false;
+      // 阻止裸 IPv4 内网地址
+      if (/^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|0\.)/.test(host)) return false;
+      // 阻止 IPv6 localhost
+      if (host === '[::1]' || host === 'localhost') return false;
+      // 阻止云元数据端点
+      if (host === '169.254.169.254' || host === 'metadata.google.internal') return false;
+      // 阻止 link-local
+      if (host.startsWith('169.254.') || host.startsWith('fe80:')) return false;
+      return true;
+    } catch (_) { return false; }
+  }
+
   // ---------- 封面代理 (带 CORS 头, 给 canvas 提取像素用) ----------
   if (pn === '/api/cover') {
     try {
       const coverUrl = url.searchParams.get('url');
       // URL 校验: 必须是 http(s) 开头, 否则直接 404 (不要让 fetch 抛错)
-      if (!coverUrl || !/^https?:\/\//i.test(coverUrl)) {
+      if (!isSafeProxyUrl(coverUrl)) {
         const errHdr = {};
         if (safeOrigin) errHdr['Access-Control-Allow-Origin'] = safeOrigin;
         res.writeHead(400, errHdr);
@@ -4016,7 +4036,7 @@ const server = http.createServer(async (req, res) => {
   if (pn === '/api/audio') {
     try {
       const audioUrl = url.searchParams.get('url');
-      if (!audioUrl) { res.writeHead(400); res.end('Missing url'); return; }
+      if (!audioUrl || !isSafeProxyUrl(audioUrl)) { res.writeHead(400); res.end('Missing or forbidden url'); return; }
       const range = req.headers.range || '';
       const hdr = audioProxyHeadersFor(audioUrl, range);
       const up = await fetch(audioUrl, { headers: hdr });

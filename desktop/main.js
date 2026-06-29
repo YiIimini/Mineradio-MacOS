@@ -1795,7 +1795,10 @@ async function createWindow() {
     setTimeout(() => applyWindowedBounds(mainWindow), 50);
   });
 
-  await mainWindow.loadURL(`http://127.0.0.1:${port}`);
+  await mainWindow.loadURL(`http://127.0.0.1:${port}`).catch((e) => {
+    console.error('Main window load failed, retrying once:', e.message);
+    return mainWindow.loadURL(`http://127.0.0.1:${port}`);
+  });
 }
 
 app.setName(APP_NAME);

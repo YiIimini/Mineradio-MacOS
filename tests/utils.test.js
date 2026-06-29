@@ -276,12 +276,12 @@ describe('getPlatformUA', () => {
 });
 
 describe('readRequestBody', () => {
-  it('resolves with empty object on error', async () => {
+  it('resolves with _bodyError on request stream error', async () => {
     // Simulate a minimal request that errors
     const req = new (require('stream').Readable)({
       read() { this.destroy(new Error('test')); }
     });
     const result = await readRequestBody(req);
-    assert.deepEqual(result, {});
+    assert.ok(result && typeof result._bodyError === 'string');
   });
 });
