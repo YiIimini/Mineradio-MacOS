@@ -1,31 +1,94 @@
 # 源码编译指南
 
+## 为什么需要源码编译？
+
+MineradioMacOS 的安装包超过 100MB（Electron 运行时约 100MB + 应用代码约 8MB），无法上传到 Gitee（单文件限制 100MB）。因此需要通过源码自行编译打包。
+
+如果你只是使用，推荐直接从 **[GitHub Releases](https://github.com/YiIimini/Mineradio-MacOS/releases)** 下载编译好的安装包。
+
 ## 环境要求
 
-- **操作系统**：macOS 12+
-- **Node.js**：18.x 或更高
-- **npm**：9.x 或更高
-- **磁盘空间**：约 500MB（含依赖和编译产物）
+| 项 | 要求 | 检查命令 |
+|---|---|---|
+| 操作系统 | macOS 12+ | `sw_vers` |
+| Node.js | 18.x ~ 22.x | `node -v` |
+| npm | 9.x+ | `npm -v` |
+| 磁盘空间 | ≥ 500MB | 访达 → 关于本机 → 存储空间 |
+| Xcode CLI | 需要（编译原生模块） | `xcode-select -p` |
 
-## 编译步骤
+## 逐步操作
+
+### 1. 安装 Node.js（如已安装可跳过）
+
+推荐使用 [nvm](https://github.com/nvm-sh/nvm) 管理 Node 版本：
 
 ```bash
-# 1. 克隆仓库
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+source ~/.zshrc
+nvm install 22
+nvm use 22
+```
+
+或者从 [nodejs.org](https://nodejs.org) 下载安装包。
+
+### 2. 安装 Xcode Command Line Tools（如未安装）
+
+```bash
+xcode-select --install
+```
+
+弹出安装窗口，点击"安装"，等待完成（约 2-5 分钟）。
+
+### 3. 克隆仓库
+
+```bash
 git clone https://gitee.com/zhangxiao91207/mineradio-mac-os.git
 cd mineradio-mac-os
+```
 
-# 2. 安装依赖
+### 4. 安装依赖
+
+```bash
 npm install
+```
 
-# 3. 运行测试（确认环境正确）
+这一步会下载 Electron、Three.js 等依赖，首次约需 3-8 分钟（取决于网络速度）。如果下载慢，可以设置国内镜像：
+
+```bash
+npm config set registry https://registry.npmmirror.com
+npm install
+```
+
+### 5. 运行测试（确认环境正确）
+
+```bash
 npm test
+```
 
-# 4. 开发运行（可选，先测试功能）
+应该输出 `# pass 100 / # fail 0`。如果有失败，检查 Node 版本和依赖是否完整。
+
+### 6. 开发运行（可选）
+
+```bash
 npm start
+```
 
-# 5. 编译打包（双架构）
+此时应用窗口会打开，可以先体验功能，确认一切正常后按 `Ctrl+C` 退出。
+
+### 7. 编译打包
+
+```bash
+# Apple Silicon (M1-M4) + Intel 双架构
 npm run build:mac -- --arm64 --x64
 ```
+
+如果只想编译当前机器架构：
+
+```bash
+npm run build:mac
+```
+
+编译约需 2-5 分钟。首次编译需要下载 Electron 二进制文件（~100MB），后续编译会复用缓存。
 
 ## 编译产物
 
