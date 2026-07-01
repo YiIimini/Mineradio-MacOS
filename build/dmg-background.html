@@ -2,44 +2,40 @@
 <html lang="zh-CN"><head><meta charset="UTF-8"><style>
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
 html,body{width:658px;height:498px;overflow:hidden;font-family:"PingFang SC","Noto Sans SC",-apple-system,sans-serif;
-  background:radial-gradient(ellipse at 48% 55%,#0d1117 0%,#06080b 68%,#010304 100%);
-  color:#fff;user-select:none;-webkit-font-smoothing:antialiased;display:flex;align-items:center;justify-content:center}
-body::before{content:'';position:absolute;inset:-8%;z-index:0;
-  background:linear-gradient(115deg,transparent 0%,rgba(255,83,103,.04) 24%,transparent 42%,rgba(244,210,138,.035) 62%,transparent 82%),
-    repeating-linear-gradient(90deg,rgba(255,255,255,.018) 0 1px,transparent 1px 54px),
-    repeating-linear-gradient(0deg,rgba(255,255,255,.012) 0 1px,transparent 1px 46px),
-    linear-gradient(180deg,#020606 0%,#050607 42%,#000 100%);
-  filter:blur(.4px);opacity:.85}
-body::after{content:'';position:absolute;inset:0;z-index:2;
-  background:linear-gradient(90deg,rgba(0,0,0,.58),transparent 21%,transparent 79%,rgba(0,0,0,.58)),
-    linear-gradient(180deg,rgba(0,0,0,.42),transparent 32%,transparent 64%,rgba(0,0,0,.48))}
-main{position:relative;z-index:10;display:flex;flex-direction:column;align-items:center;gap:28px}
-.wordmark{display:flex;align-items:baseline;gap:0;font-size:68px;line-height:.92;font-weight:720;letter-spacing:-.055em;height:72px}
-.wordmark .mine{color:#f8f8f2;text-shadow:0 20px 82px rgba(0,0,0,.68),-2px 0 18px rgba(255,83,103,.16)}
-.wordmark .radio{background:linear-gradient(94deg,rgba(255,255,255,.06),#fff 26%,rgba(244,210,138,.98) 48%,rgba(122,215,194,.90) 68%,rgba(255,255,255,.82));background-size:300% 100%;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;text-shadow:-2px 0 0 rgba(255,83,103,.16),2px 0 0 rgba(122,215,194,.22),0 0 34px rgba(122,215,194,.10)}
-.wordmark i{display:inline-block;position:relative;width:.24em;height:.86em;margin:0 .018em;color:transparent}
-.wordmark i::before{content:'';position:absolute;left:50%;bottom:.015em;width:.108em;height:.565em;border-radius:.06em;background:linear-gradient(180deg,#f8edd1 0%,#d8bd78 100%);transform:translateX(-50%);box-shadow:0 0 14px rgba(244,210,138,.12)}
-.wordmark i::after{content:'';position:absolute;left:50%;top:.035em;width:.142em;height:.142em;border-radius:50%;background:#fff;box-shadow:0 0 16px rgba(244,210,138,.44),0 0 36px rgba(255,255,255,.16);transform:translate(-50%,0) scale(1)}
-.signal{width:360px;height:2px;background:linear-gradient(90deg,transparent,rgba(122,215,194,.18),rgba(255,255,255,.62),rgba(244,210,138,.52),rgba(255,83,103,.16),transparent);box-shadow:0 0 18px rgba(244,210,138,.16),0 0 34px rgba(122,215,194,.06)}
-.signal::after{content:'';display:block;width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.72);box-shadow:0 0 24px rgba(244,210,138,.36);margin:-2px auto 0}
-.arrow{display:flex;align-items:center;gap:24px;margin-top:12px}
-.arrow svg{width:52px;height:36px;stroke:rgba(244,210,138,.62);stroke-width:1.6;fill:none;filter:drop-shadow(0 0 8px rgba(244,210,138,.22))}
-.app-icon{width:76px;height:76px;border-radius:18px;background:linear-gradient(135deg,rgba(20,22,26,.94),rgba(8,10,14,.98));border:1px solid rgba(255,255,255,.08);box-shadow:0 18px 48px rgba(0,0,0,.52),inset 0 1px 0 rgba(255,255,255,.08);display:flex;align-items:center;justify-content:center;font-size:34px}
-.apps-folder{width:76px;height:76px;border-radius:12px;background:rgba(45,155,255,.12);border:1.5px dashed rgba(45,155,255,.28);box-shadow:0 14px 38px rgba(45,155,255,.06);display:flex;align-items:center;justify-content:center;font-size:28px}
-.hint{font-size:12px;font-weight:520;letter-spacing:.16em;color:rgba(255,255,255,.42);margin-top:6px}
-.version{font-size:10px;letter-spacing:.12em;color:rgba(255,255,255,.18);margin-top:2px}
+  background:#0a0d12;color:#fff;user-select:none;-webkit-font-smoothing:antialiased;display:flex;align-items:center;justify-content:center}
+/* 顶部光晕 */
+body::before{content:'';position:absolute;top:-20%;left:30%;width:60%;height:70%;
+  background:radial-gradient(ellipse,rgba(244,210,138,.06) 0%,transparent 70%);
+  z-index:0}
+/* 底部网格 */
+body::after{content:'';position:absolute;inset:0;z-index:0;opacity:.25;
+  background-image:linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px);
+  background-size:48px 48px}
+main{position:relative;z-index:10;display:flex;flex-direction:column;align-items:center;gap:22px}
+.logo{font-size:54px;font-weight:680;letter-spacing:-.04em;display:flex;align-items:baseline;gap:0}
+.logo .m{color:rgba(255,255,255,.88);text-shadow:0 0 60px rgba(244,210,138,.08)}
+.logo .r{background:linear-gradient(100deg,rgba(244,210,138,.9),rgba(166,220,198,.85),rgba(244,210,138,.9));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.logo .dot{display:inline-block;width:10px;height:10px;margin:0 2px 18px;border-radius:50%;background:rgba(244,210,138,.6);box-shadow:0 0 10px rgba(244,210,138,.3)}
+.divider{width:280px;height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.15),rgba(244,210,138,.25),rgba(255,255,255,.15),transparent)}
+.guide{display:flex;align-items:center;gap:28px;margin-top:8px}
+.icon-spot{width:80px;height:80px;border-radius:18px;display:flex;align-items:center;justify-content:center;
+  background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06)}
+.icon-spot.app{font-size:36px;box-shadow:0 16px 40px rgba(0,0,0,.3)}
+.icon-spot.folder{font-size:32px;border-style:dashed;border-color:rgba(255,255,255,.12)}
+.arrow-svg{width:46px;height:30px;stroke:rgba(255,255,255,.22);stroke-width:1.4;fill:none}
+.arrow-svg path{filter:drop-shadow(0 0 6px rgba(244,210,138,.15))}
+.hint{font-size:13px;letter-spacing:.06em;color:rgba(255,255,255,.35);font-weight:500}
+.tagline{font-size:10px;letter-spacing:.1em;color:rgba(255,255,255,.14)}
 </style></head><body>
 <main>
-  <div class="wordmark">
-    <span class="mine">Mine</span><i></i><span class="radio">radio</span>
+  <div class="logo"><span class="m">Mine</span><span class="dot"></span><span class="r">radio</span></div>
+  <div class="divider"></div>
+  <div class="guide">
+    <div class="icon-spot app">🎵</div>
+    <svg class="arrow-svg" viewBox="0 0 46 30"><path d="M4 15h30l-7-7M34 8l7 7-7 7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <div class="icon-spot folder">📂</div>
   </div>
-  <div class="signal"></div>
-  <div class="arrow">
-    <div class="app-icon">🎵</div>
-    <svg viewBox="0 0 52 36"><path d="M4 18h36l-8-8M42 10l8 8-8 8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    <div class="apps-folder">📂</div>
-  </div>
-  <div class="hint">将 Mineradio 拖入 Applications 文件夹</div>
-  <div class="version">沉浸式 · 音乐可视化播放器</div>
+  <div class="hint">拖入 Applications 文件夹</div>
+  <div class="tagline">Mineradio-MacOS · 沉浸式音乐可视化</div>
 </main>
 </body></html>

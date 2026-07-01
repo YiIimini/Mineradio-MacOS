@@ -45,3 +45,15 @@ tmp/
 *.png.tmp
 verification/
 screenshots/
+
+# Audio source files (user content, large files)
+音源/
+audio-source/
+*.mp3
+*.flac
+*.wav
+*.m4a
+*.ogg
+
+# Duplicate/temp documents
+*_副本.*

@@ -371,6 +371,17 @@ function makeShelfManager() {
         requestPlaylistCover(item.cover, function(){ drawCard(card, item); });
       }
     }
+    // Default: red heart icon when no cover
+    if (!item.cover || ((function(){
+      var r = item.cover ? playlistCoverCache[item.cover] : null;
+      return !r || r.failed || (!r.loaded && !r.loading);
+    })())) {
+      ctx.save();
+      ctx.font = Math.round(coverSize * 0.55) + 'px sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('❤️', cx + coverSize/2, cy + coverSize/2);
+      ctx.restore();
+    }
 
     // 文本区
     var tx = pad + coverSize + 32;
@@ -2009,7 +2020,7 @@ function drawCanvasHeart(ctx, cx, cy, size, color) {
   ctx.restore();
 }
 function requestPlaylistCover(url, cb) {
-  if (!url) { if (cb) cb(null); return; }
+  if (!url || typeof url !== 'string' || !/^https?:\/\//i.test(url)) { if (cb) setTimeout(function(){ cb(null); }, 0); return; }
   var rec = playlistCoverCache[url];
   if (rec && rec.loaded) { if (cb) setTimeout(function(){ cb(rec.img); }, 0); return; }
   if (rec && rec.loading) { if (cb) rec.waiters.push(cb); return; }
@@ -2103,7 +2114,9 @@ function isShelfPlaylistPlayHit(hit) {
   if (!hit || !hit.card || !hit.uv || !hit.card.item || hit.card.item.type !== 'playlist') return false;
   return hit.uv.x >= 0.49 && hit.uv.x <= 0.72 && hit.uv.y >= 0.13 && hit.uv.y <= 0.42;
 }
-renderer.domElement.addEventListener('click', function(e){
+function initShelfClickHandler() {
+  if (!renderer || !renderer.domElement) return;
+  renderer.domElement.addEventListener('click', function(e){
   if (!shelfManager || shelfManager.getMode() === 'off') return;
   if (document.body.classList.contains('splash-active')) return;
   if (isPointerOverUi(e)) return;
@@ -2174,8 +2187,11 @@ renderer.domElement.addEventListener('click', function(e){
     setShelfPinnedOpen(false, true);
   }
 });
+}
 
-renderer.domElement.addEventListener('contextmenu', function(e){
+function initShelfContextMenuHandler() {
+  if (typeof renderer === 'undefined' || !renderer || !renderer.domElement) return;
+  renderer.domElement.addEventListener('contextmenu', function(e){
   if (document.body.classList.contains('splash-active')) return;
   if (isPointerOverUi(e)) return;
   e.preventDefault();
@@ -2204,13 +2220,12 @@ renderer.domElement.addEventListener('contextmenu', function(e){
   setShelfPinnedOpen(!shelfPinnedOpen, true);
   if (!shelfPinnedOpen && typeof setFocusZone === 'function') setFocusZone(null, true);
 });
+}
 
-// 滚轮: 在真实卡片或右侧窄热区内滚卡片; 否则保留给封面粒子/视角
-//   side 模式: 常驻不再用半屏预览区接管滚轮
-//   stage 模式: 鼠标 y > 60% 屏幕高
-//   shift + wheel: 强制滚卡片
 var wheelOverShelf = false;
-renderer.domElement.addEventListener('wheel', function(e){
+function initShelfWheelHandler() {
+  if (typeof renderer === 'undefined' || !renderer || !renderer.domElement) return;
+  renderer.domElement.addEventListener('wheel', function(e){
   if (isPointerOverUi(e)) return;
   if (!shelfManager || shelfManager.getMode() === 'off') return;
   markRenderInteraction('shelf-wheel', 900);
@@ -2246,6 +2261,7 @@ renderer.domElement.addEventListener('wheel', function(e){
     shelfManager.scrollBy(e.deltaY > 0 ? 1 : -1);
   }
 }, { passive: false, capture: true });
+}
 
 // 键盘 / 全局事件
 function isFreeCameraControlCode(code) {

@@ -48,13 +48,16 @@ const NETEASE_LOGIN_URL = 'https://music.163.com/#/login';
 const QQ_LOGIN_PARTITION = 'persist:mineradio-qqmusic-login';
 const QQ_LOGIN_URL = 'https://y.qq.com/n/ryqq/profile';
 
+// GPU optimization: removed aggressive hardware-acceleration flags that push
+// rasterization, compositing, and canvas work to GPU unnecessarily on Mac.
+// Retained flags are essential for audio playback and background behavior.
 const CHROMIUM_PERFORMANCE_SWITCHES = [
   ['autoplay-policy', 'no-user-gesture-required'],
-  ['ignore-gpu-blocklist'],
-  ['enable-gpu-rasterization'],
-  ['enable-oop-rasterization'],
-  ['enable-zero-copy'],
-  ['enable-accelerated-2d-canvas'],
+  // ['ignore-gpu-blocklist'],          // GPU opt: allow Chromium to decide
+  // ['enable-gpu-rasterization'],      // GPU opt: CPU raster may be more efficient
+  // ['enable-oop-rasterization'],      // GPU opt: avoid extra GPU memory pressure
+  // ['enable-zero-copy'],              // GPU opt: avoid VRAM pressure from zero-copy
+  // ['enable-accelerated-2d-canvas'],  // GPU opt: Canvas2D on GPU can be slower
   ['disable-background-timer-throttling'],
   ['disable-renderer-backgrounding'],
   ['disable-backgrounding-occluded-windows'],
@@ -1144,7 +1147,21 @@ function positionWallpaperWindow() {
 
 function sendWallpaperState() {
   if (!wallpaperWindow || wallpaperWindow.isDestroyed()) return;
+  // GPU opt: pause wallpaper rendering when main window covers it (fullscreen/maximized)
+  var mainCoversScreen = mainWindow && !mainWindow.isDestroyed()
+    && (mainWindow.isFullScreen() || mainWindow.isMaximized() || windowFullscreenActive);
+  wallpaperState.paused = !!wallpaperState.paused || mainCoversScreen;
   wallpaperWindow.webContents.send('mineradio-wallpaper-state', wallpaperState);
+}
+
+function resumeWallpaperIfPaused() {
+  if (!wallpaperState.paused) return;
+  var mainCoversScreen = mainWindow && !mainWindow.isDestroyed()
+    && (mainWindow.isFullScreen() || mainWindow.isMaximized() || windowFullscreenActive);
+  if (!mainCoversScreen) {
+    wallpaperState.paused = false;
+    sendWallpaperState();
+  }
 }
 
 function createWallpaperWindow(payload = {}) {
@@ -1291,7 +1308,9 @@ ipcMain.handle('desktop-window-get-state', (event) => {
 });
 
 ipcMain.handle('desktop-window-close', (event) => {
-  getSenderWindow(event)?.close();
+  var win = getSenderWindow(event);
+  if (!win || win.isDestroyed()) return;
+  win.close();
 });
 
 ipcMain.handle('mineradio-hotkeys-configure-global', (_event, bindings) => {
@@ -1643,8 +1662,11 @@ function stopMacOSMediaHelper() {
 async function createWindow() {
   htmlFullscreenActive = false;
   windowFullscreenActive = false;
-  const port = await findOpenPort(3000);
-  mainServerPort = port;
+  // Reuse existing port if server already running (macOS close→dock restore)
+  if (!mainServerPort || !localServer || !localServer.listening) {
+    mainServerPort = await findOpenPort(3000);
+  }
+  const port = mainServerPort;
 
   process.env.HOST = '127.0.0.1';
   process.env.PORT = String(port);
@@ -1675,14 +1697,14 @@ async function createWindow() {
     show: false,
     frame: false,
     fullscreen: false,
-    transparent: true,
-    backgroundColor: '#00000000',
     hasShadow: true,
     fullscreenable: true,
     autoHideMenuBar: true,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     title: APP_NAME,
     icon: APP_ICON,
+    transparent: true,
+    backgroundColor: '#00000000',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -1760,11 +1782,12 @@ async function createWindow() {
     sendWindowState(mainWindow);
   });
 
-  mainWindow.on('maximize', () => sendWindowState(mainWindow));
-  mainWindow.on('unmaximize', () => sendWindowState(mainWindow));
+  mainWindow.on('maximize', () => { sendWindowState(mainWindow); sendWallpaperState(); });
+  mainWindow.on('unmaximize', () => { sendWindowState(mainWindow); resumeWallpaperIfPaused(); });
   mainWindow.on('minimize', () => sendWindowState(mainWindow));
   mainWindow.on('restore', () => sendWindowState(mainWindow));
   mainWindow.on('show', () => sendWindowState(mainWindow));
+  mainWindow.on('hide', () => sendWindowState(mainWindow));
   mainWindow.on('hide', () => sendWindowState(mainWindow));
   mainWindow.on('focus', () => sendWindowState(mainWindow));
   mainWindow.on('blur', () => sendWindowState(mainWindow));
@@ -1781,9 +1804,11 @@ async function createWindow() {
   mainWindow.on('enter-full-screen', () => {
     windowFullscreenActive = true;
     sendWindowState(mainWindow);
+    sendWallpaperState();  // GPU opt: pause wallpaper behind fullscreen window
   });
   mainWindow.on('leave-full-screen', () => {
     windowFullscreenActive = false;
+    resumeWallpaperIfPaused();  // GPU opt: resume wallpaper when exiting fullscreen
     setTimeout(() => applyWindowedBounds(mainWindow), 50);
   });
   mainWindow.on('enter-html-full-screen', () => {

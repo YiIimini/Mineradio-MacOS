@@ -8,11 +8,15 @@ var BASS_THRESHOLD = 0.30;
 var RIPPLE_COOLDOWN = 0.32;
 
 var regions = [];
-for (var ry = 0; ry < 3; ry++) for (var rx = 0; rx < 3; rx++) {
-  regions.push({
-    x: (rx / 2 - 0.5) * PLANE_SIZE * 0.72,
-    y: (ry / 2 - 0.5) * PLANE_SIZE * 0.72,
-  });
+function initRippleRegions() {
+  if (regions.length) return;
+  var ps = (typeof PLANE_SIZE !== 'undefined' ? PLANE_SIZE : 4.8);
+  for (var ry = 0; ry < 3; ry++) for (var rx = 0; rx < 3; rx++) {
+    regions.push({
+      x: (rx / 2 - 0.5) * ps * 0.72,
+      y: (ry / 2 - 0.5) * ps * 0.72,
+    });
+  }
 }
 
 function triggerRipple(x, y, strength) {
@@ -21,7 +25,7 @@ function triggerRipple(x, y, strength) {
   rippleIdx = (rippleIdx + 1) % RIPPLE_MAX;
 }
 
-function updateRipples(dt) {
+function updateRipples(dt) { initRippleRegions();
   var isBassHit = bass > BASS_THRESHOLD && !lastBassRising;
   lastBassRising = bass > BASS_THRESHOLD * 0.75;
   var now = uniforms.uTime.value;
@@ -520,25 +524,37 @@ function applyCoverCanvas(cv, thumbSrc, opts) {
   var cacheSeed = (opts.coverKey || thumbSrc || '') + '|tex=' + (cv.width || 0) + 'x' + (cv.height || 0);
   var cachedDepth = getCoverDepthCache(cacheSeed);
   // 切歌颜色渐变: 把当前 coverTex 当作 prevCoverTex
-  if (uniforms.uHasCover.value > 0.5 && coverTex.image) {
-    var prevW = coverTex.image.width || 256;
-    var prevH = coverTex.image.height || 256;
+  if (uniforms.uHasCover.value > 0.5 && coverTex.source && coverTex.source.data) {
+    var srcImg = coverTex.source.data;
+    var prevW = srcImg.width || 256;
+    var prevH = srcImg.height || 256;
     var prevScale = Math.min(1, 256 / Math.max(prevW, prevH, 1));
     var prevCv = document.createElement('canvas');
     prevCv.width = Math.max(1, Math.round(prevW * prevScale));
     prevCv.height = Math.max(1, Math.round(prevH * prevScale));
     try {
-      prevCv.getContext('2d').drawImage(coverTex.image, 0, 0, prevCv.width, prevCv.height);
-      prevCoverTex.image = prevCv;
-      prevCoverTex.needsUpdate = true;
+      prevCv.getContext('2d').drawImage(srcImg, 0, 0, prevCv.width, prevCv.height);
+      prevCoverTex.dispose();
+      prevCoverTex = new THREE.CanvasTexture(prevCv);
+      prevCoverTex.minFilter = THREE.LinearFilter; prevCoverTex.magFilter = THREE.LinearFilter;
+      if (THREE.LinearSRGBColorSpace) prevCoverTex.colorSpace = THREE.LinearSRGBColorSpace;
+      uniforms.uPrevCoverTex.value = prevCoverTex;
     } catch (e) {}
   }
-  coverTex.image = cv; coverTex.needsUpdate = true;
+  // r160: create new CanvasTexture for proper sizing (no texSubImage2D overflow)
+  coverTex.dispose();
+  coverTex = new THREE.CanvasTexture(cv);
+  coverTex.minFilter = THREE.LinearFilter; coverTex.magFilter = THREE.LinearFilter;
+  if (THREE.LinearSRGBColorSpace) coverTex.colorSpace = THREE.LinearSRGBColorSpace;
+  uniforms.uCoverTex.value = coverTex;
   coverPickerCanvas = cv;
   uniforms.uHasCover.value = 1;
   if (cachedDepth && cachedDepth.canvas) {
-    coverEdgeTex.image = cachedDepth.canvas;
-    coverEdgeTex.needsUpdate = true;
+    coverEdgeTex.dispose();
+    coverEdgeTex = new THREE.CanvasTexture(cachedDepth.canvas);
+    coverEdgeTex.minFilter = THREE.LinearFilter; coverEdgeTex.magFilter = THREE.LinearFilter;
+    if (THREE.LinearSRGBColorSpace) coverEdgeTex.colorSpace = THREE.LinearSRGBColorSpace;
+    uniforms.uEdgeTex.value = coverEdgeTex;
     setCoverDepthState(1, cachedDepth.ai ? 1.0 : 0.55, opts.deferHeavy ? 180 : 120);
   } else {
     setCoverDepthState(opts.deferHeavy ? (uniforms.uHasDepth.value > 0.5 ? 0.22 : 0) : 0, opts.deferHeavy ? 0.20 : 0, opts.deferHeavy ? 120 : 1);

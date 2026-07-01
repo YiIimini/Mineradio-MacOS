@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.4.0
+
+- **Three.js r160 升级**：WebGL 2.0，纹理 API 适配（CanvasTexture + source.data），InstancedBufferAttribute，色域锁定
+- **GPU 深度优化**：柱体 GC 消除、frustum 剔除全开、网格降密度 224→128、权重预计算、粒子 bloom 合并、壁纸智能暂停、质量档位全链路（eco/balanced/high/ultra）、跳帧更新、边缘柱体透明
+- **手势控歌**：三选一模式，指头识别（拳头播放/食指下一首/手掌暂停），可调阈值，帮助弹窗
+- **多行歌词**：独立 3D plane + Z-depth 阶梯层次，鼠标视角跟随，行数可调
+- **炫酷配色**：5 套主题（暗夜/水墨/紫金/珊瑚/极光），UI 切换
+- **设置持久化**：particleLyrics、floatLayer、lyricSourceMode 存档修复
+- **Bug 修复**：切歌栈溢出、ReadLyricLayout 启动报错、shelf 事件监听器时序、歌单无封面占位 ❤️、CSP blob Worker、GL_INVALID_VALUE 纹理溢出
+- **打包**：DMG 默认背景，产品名 MineradioMacOS，打赏支持
+- **棋盘式海浪**：sonic-topography 棋盘格特效移植，独立配色系统，地面 EQ，相机适配
+- **LX 音源**：LX Music 音源桥接集成，上传验证，搜索 API，管理面板
+- **界面**：启动页 MacOS 镜像文字，维护者落款，作者按钮/弹窗，Home 页毛选语录
+- **设置**：默认播放模式，歌单搜索，柱形预设隐藏，炫酷配色标签独立
+
 ## v1.3.0
 
 - 代码去重：消除 18 个重复工具函数，统一 UA 定义

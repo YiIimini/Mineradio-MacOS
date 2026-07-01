@@ -52,6 +52,11 @@ contextBridge.exposeInMainWorld('desktopWindow', {
     ipcRenderer.on('desktop-window-state', listener);
     return () => ipcRenderer.removeListener('desktop-window-state', listener);
   },
+  onForceRecover: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('mineradio-force-recover', listener);
+    return () => ipcRenderer.removeListener('mineradio-force-recover', listener);
+  },
 });
 
 window.addEventListener('DOMContentLoaded', () => {

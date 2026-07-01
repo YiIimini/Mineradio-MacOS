@@ -8,11 +8,11 @@
 <!-- Resource hints for faster font loading -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="preload" href="vendor/three.r128.min.js" as="script">
+<link rel="preload" href="vendor/three.r160.min.js" as="script">
 <link rel="preload" href="vendor/gsap.min.js" as="script">
 <link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Inter:wght@200;300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700;900&family=UnifrakturCook:wght@700&display=swap" rel="stylesheet">
 <!-- Vendor scripts: defer loads in order after HTML parse, non-blocking -->
-<script defer src="vendor/three.r128.min.js"></script>
+<script defer src="vendor/three.r160.min.js"></script>
 <script defer src="vendor/music-tempo.min.js"></script>
 <script defer src="vendor/gsap.min.js"></script>
 <!-- Preload: must be synchronous to set CSS class before first paint -->
@@ -24,6 +24,7 @@ try {
 }
 </script>
 <link rel="stylesheet" href="css/app.css">
+<script>window.addEventListener('unhandledrejection',function(e){var m=e.reason&&e.reason.message;if(m&&(/Invalid URL|Failed to construct.*URL/.test(m))){e.preventDefault()}})</script>
 </head>
 <body>
 <div id="desktop-window-shell">
@@ -42,6 +43,7 @@ try {
         <path class="update-arrow" d="M8.7 10.7 12 7.4l3.3 3.3"></path>
       </svg>
     </button>
+    <button id="author-btn" class="desktop-mode-btn" type="button" onclick="showAuthorModal()" title="关于作者" style="background:rgba(244,210,138,0.08);border-color:rgba(244,210,138,0.2);margin-right:4px;animation:author-pulse 3s ease-in-out infinite">Yi</button>
     <button id="diy-mode-btn" class="desktop-mode-btn" type="button" onclick="toggleDiyMode()" title="开启 DIY 玩家模式" aria-label="开启 DIY 玩家模式" aria-pressed="false">DIY</button>
     <button class="desktop-window-btn" data-window-action="minimize" title="最小化" aria-label="最小化">
       <svg viewBox="0 0 16 16"><path d="M3 8h10"/></svg>
@@ -75,6 +77,10 @@ try {
       <span class="splash-word-radio" aria-label="radio">rad<span class="splash-word-i" aria-hidden="true"></span><span class="splash-word-o">o</span></span>
     </div>
     <div class="splash-signal-line"></div>
+    <div class="splash-macos-mirror" aria-hidden="true">
+      <span class="m">Mac</span><span class="r">OS</span>
+    </div>
+    <div class="splash-author" aria-hidden="true">维护者：YiIimini</div>
     <div class="splash-sub">private visual radio</div>
     <div class="splash-enter" aria-hidden="true">点击进入</div>
   </div>
@@ -93,6 +99,7 @@ try {
       <button id="search-mode-song" class="active" type="button" onclick="setSearchMode('song')" aria-selected="true">All</button>
       <button id="search-mode-netease" type="button" onclick="setSearchMode('netease')" aria-selected="false">NE</button>
       <button id="search-mode-qq" type="button" onclick="setSearchMode('qq')" aria-selected="false">QQ</button>
+      <button id="search-mode-lx" type="button" onclick="setSearchMode('lx')" aria-selected="false">LX</button>
       <button id="search-mode-podcast" type="button" onclick="setSearchMode('podcast')" aria-selected="false">Podcast</button>
     </div>
     <div id="search-results"></div>
@@ -101,11 +108,26 @@ try {
     <button id="upload-btn" class="icon-btn" onclick="document.getElementById('file-input').click()" title="导入音乐或封面">
       <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
     </button>
+    <button id="lx-source-btn" class="icon-btn" onclick="toggleLxSourcePanel()" title="LX 音源管理" style="position:relative">
+      <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
+    </button>
     <button id="clear-cover-btn" class="icon-btn" onclick="clearCustomCoverForCurrent()" title="取消自定义封面" aria-label="取消自定义封面">×</button>
     <div id="upload-tip" role="status" aria-live="polite">
       <button class="upload-tip-close" onclick="closeUploadTip(true)" aria-label="关闭提示">×</button>
       <span class="upload-tip-title">导入入口</span>
       这里支持上传歌曲，也可以给当前曲目换自定义封面。
+    </div>
+    <div id="lx-source-panel" onmouseleave="this.style.display='none'" style="display:none;position:absolute;top:44px;right:0;z-index:30;width:360px;max-height:420px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(244,210,138,0.2) transparent;background:rgba(14,16,22,0.97);border:1px solid rgba(244,210,138,0.16);border-radius:14px;padding:18px;backdrop-filter:blur(24px);font:13px/1.5 'PingFang SC','Noto Sans SC',sans-serif;color:rgba(255,255,255,0.82);box-shadow:0 16px 48px rgba(0,0,0,0.5)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,0.08)">
+        <span style="font-size:15px;font-weight:700;color:#f4d28a">LX 音源管理</span>
+        <div style="display:flex;gap:8px">
+          <button onclick="document.getElementById('lx-source-upload').click()" style="font:12px 'PingFang SC',sans-serif;padding:3px 10px;border:1px solid rgba(100,255,180,0.22);border-radius:6px;background:rgba(100,255,180,0.06);color:rgba(100,255,180,0.7);cursor:pointer">上传</button>
+          <input id="lx-source-upload" type="file" accept=".js" onchange="uploadLxSource(this)" style="display:none">
+          <button onclick="reloadLxSources()" style="font:12px 'PingFang SC',sans-serif;padding:3px 10px;border:1px solid rgba(255,255,255,0.15);border-radius:6px;background:rgba(255,255,255,0.04);color:rgba(255,255,255,0.7);cursor:pointer">刷新</button>
+          <button onclick="document.getElementById('lx-source-panel').style.display='none'" style="font:12px 'PingFang SC',sans-serif;padding:3px 10px;border:1px solid rgba(255,255,255,0.15);border-radius:6px;background:rgba(255,255,255,0.04);color:rgba(255,255,255,0.7);cursor:pointer">×</button>
+        </div>
+      </div>
+      <div id="lx-source-list" style="font:12px/1.5 'PingFang SC','Noto Sans SC',sans-serif;color:rgba(255,255,255,0.6)">加载中...</div>
     </div>
   </div>
 </div>
@@ -116,7 +138,8 @@ try {
     <div class="home-hero">
       <div class="home-hero-inner home-flag-inner">
         <canvas id="home-flag-canvas" class="home-flag-canvas"></canvas>
-        <button class="home-chip home-console-chip home-flag-console" type="button" onclick="openHomePlayerConsole()">展开播放器控制台</button>
+        <div id="home-mao-quote" style="display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;text-align:center;color:rgba(244,210,138,0.82);padding:0 24px"></div>
+        <button class="home-chip home-console-chip home-flag-console" type="button" onclick="openHomePlayerConsole()" style="display:none">展开播放器控制台</button>
       </div>
     </div>
 
@@ -193,6 +216,28 @@ try {
 
   <div class="fx-section-label">视觉预设</div>
   <div class="preset-grid" id="preset-grid"></div>
+  <div id="terrain-theme-picker" style="display:none;margin-bottom:10px">
+    <div class="fx-section-label">炫酷配色</div>
+    <div class="fx-seg" id="terrain-theme-seg" data-for="terrain">
+      <button data-theme="nocturnal" class="active">暗夜</button>
+      <button data-theme="ink_wash">水墨</button>
+      <button data-theme="royal">紫金</button>
+      <button data-theme="ocean_reef">珊瑚</button>
+      <button data-theme="aurora">极光</button>
+    </div>
+    <div class="fx-seg" id="checker-theme-seg" data-for="checker" style="display:none">
+      <button data-theme="minimal_mono" class="active">极简</button>
+      <button data-theme="ink_wash">水墨</button>
+      <button data-theme="nocturnal">暗夜</button>
+      <button data-theme="neon_tokyo">霓虹</button>
+      <button data-theme="cyber_forest">森林</button>
+    </div>
+    <div id="checker-eq-settings" style="display:none;margin-top:6px">
+      <div class="fx-slider"><label>网格密度</label><input id="fx-checker-density" type="range" min="0" max="100" step="1"><output></output></div>
+      <div class="fx-slider"><label>振幅</label><input id="fx-checker-amplitude" type="range" min="0" max="100" step="1"><output></output></div>
+      <div class="fx-slider"><label>运动速度</label><input id="fx-checker-speed" type="range" min="0" max="100" step="1"><output></output></div>
+    </div>
+  </div>
   <div class="fx-section-label">用户存档</div>
   <div class="user-archive-grid" id="user-archive-grid"></div>
   <div class="fx-section-label">自定义颜色</div>
@@ -405,6 +450,15 @@ try {
       <div class="fx-seg" id="cam-seg">
         <button data-cam="off" class="active">关闭</button>
         <button data-cam="gesture">手势触碰</button>
+        <button data-cam="playback">手势控歌</button>
+      </div>
+      <div id="gesture-playback-settings" style="display:none">
+        <div class="fx-section-label" style="margin-top:8px">手势控歌参数 <button id="gesture-help-btn" class="fx-mini-btn ghost" type="button" onclick="showGestureHelp()" style="margin-left:8px;font-size:12px">? 查看判别逻辑</button></div>
+        <div class="fx-slider"><label>拳头阈值</label><input id="fx-gesture-fist" type="range" min="0.04" max="0.30" step="0.01"><output></output></div>
+        <div class="fx-slider"><label>食指阈值</label><input id="fx-gesture-finger" type="range" min="0.22" max="0.50" step="0.01"><output></output></div>
+        <div class="fx-slider"><label>手掌阈值</label><input id="fx-gesture-palm" type="range" min="0.50" max="0.80" step="0.01"><output></output></div>
+        <div class="fx-slider"><label>保持时间 (ms)</label><input id="fx-gesture-hold" type="range" min="300" max="2000" step="50"><output></output></div>
+        <div class="fx-slider"><label>冷却时间 (ms)</label><input id="fx-gesture-cooldown" type="range" min="500" max="4000" step="100"><output></output></div>
       </div>
     </div>
   </div>
@@ -419,6 +473,12 @@ try {
         <button data-performance-background="auto">自动优化</button>
         <button data-performance-background="keep">保持运行</button>
         <button data-performance-background="release">停止释放</button>
+      </div>
+      <div class="fx-section-label">默认播放模式</div>
+      <div class="fx-seg" id="default-play-mode-seg">
+        <button data-mode="loop" class="active">顺序</button>
+        <button data-mode="shuffle">随机</button>
+        <button data-mode="single">单曲</button>
       </div>
       <div class="fx-section-label">画质档位</div>
       <div class="fx-seg" id="performance-quality-seg" title="控制可见状态下的渲染像素预算，重启后保留">
@@ -460,6 +520,7 @@ try {
     <button id="tab-podcast" class="panel-tab" onclick="switchPlaylistTab('podcasts')">我的播客</button>
   </div>
   <div id="queue-pane">
+    <input id="playlist-search-input" type="text" placeholder="搜索歌单内歌曲..." autocomplete="off" spellcheck="false" oninput="filterPlaylistItems(this.value)" style="display:block;width:100%;padding:6px 10px;border:1px solid rgba(255,255,255,0.1);border-radius:6px;background:rgba(255,255,255,0.04);color:rgba(255,255,255,0.7);font:11px 'PingFang SC',sans-serif;outline:none;margin-bottom:4px;box-sizing:border-box">
     <div class="queue-toolbar">
       <div id="play-mode-chip" class="queue-chip">顺序循环</div>
       <div style="display:flex;gap:6px">
@@ -513,7 +574,7 @@ try {
 
 <!-- 左下小封面 -->
 <div id="thumb-wrap">
-  <img id="thumb-cover" src="" alt="">
+  <img id="thumb-cover" alt="">
   <div id="thumb-info">
     <div id="thumb-title" onclick="openTrackDetailModal('song')" title="歌曲详情"></div>
     <div id="thumb-artist" onclick="openTrackDetailModal('artist')" title="歌手详情"></div>
@@ -661,7 +722,7 @@ try {
     <h2 id="login-modal-title">扫码登录网易云音乐</h2>
     <div id="login-modal-desc" class="desc">使用 <b>网易云音乐 App</b> 扫码，可同步歌单、红心与播客。</div>
     <div id="qr-shell" class="qr-shell">
-      <img id="qr-img" src="" alt="">
+      <img id="qr-img" alt="">
       <button id="qq-web-login-card" class="qq-login-mark" type="button" onclick="openProviderWebLogin()"><b>QQ</b><span>打开官方扫码窗口</span></button>
     </div>
     <div id="qr-status">正在生成二维码…</div>
@@ -687,7 +748,7 @@ try {
   <div class="modal dual-user-modal">
     <h2>账号信息</h2>
     <div id="account-provider-chip" class="account-provider-chip netease"><span class="account-source-dot netease"></span><span>网易云音乐</span></div>
-    <img id="user-modal-avatar" src="" style="width:72px;height:72px;border-radius:50%;margin:0 auto 12px;object-fit:cover;background:rgba(255,255,255,0.1);display:block">
+    <img id="user-modal-avatar" style="width:72px;height:72px;border-radius:50%;margin:0 auto 12px;object-fit:cover;background:rgba(255,255,255,0.1);display:block" alt="">
     <div id="user-modal-name" style="font-size:15px;margin-bottom:4px"></div>
     <div id="user-modal-vip" style="font-size:11px;color:rgba(255,255,255,0.5);margin-bottom:20px;letter-spacing:.5px"></div>
     <div class="user-platform-tabs" id="user-platform-tabs">
@@ -858,5 +919,49 @@ try {
 <script defer src="js/login.js"></script>
 <script defer src="js/app.js"></script>
 <script defer src="mineradio-terrain.js"></script>
+
+<!-- 手势控歌说明弹窗 -->
+<div id="author-modal" class="modal-mask" onclick="if(event.target===this)closeAuthorModal()">
+  <div class="modal" style="max-width:480px;padding:28px 32px;text-align:center;pointer-events:auto">
+    <h2 style="margin:0 0 6px;font-size:22px;color:#f4d28a">YiIimini</h2>
+    <div style="font:14px/1.7 sans-serif;color:rgba(244,210,138,.5);margin-bottom:20px">
+      MineradioMacOS 移植与深度优化
+    </div>
+    <div style="text-align:center;margin-bottom:14px">
+      <img src="xc/dy.png" onclick="window.open('https://www.douyin.com/user/yiilimini','_blank')" style="width:160px;border-radius:10px;cursor:pointer" alt="抖音" title="打开抖音主页">
+      <br><sub style="color:rgba(244,210,138,.45);font-size:12px">抖音 · 开发者动态</sub>
+    </div>
+    <div style="display:flex;justify-content:center;gap:24px">
+      <div style="text-align:center;width:160px">
+        <img src="ds/wechat-pay.jpg" style="width:160px;height:240px;object-fit:cover;border-radius:10px" alt="微信赞赏"><br>
+        <sub style="color:rgba(244,210,138,.45);font-size:12px">微信赞赏</sub>
+      </div>
+      <div style="text-align:center;width:160px">
+        <img src="ds/alipay.png" style="width:160px;height:240px;object-fit:cover;border-radius:10px" alt="支付宝"><br>
+        <sub style="color:rgba(244,210,138,.45);font-size:12px">支付宝</sub>
+      </div>
+    </div>
+    <div style="margin-top:16px;font:13px/1.8 sans-serif;color:rgba(244,210,138,.5)">
+      MineradioMacOS 给你带来了更好的音乐体验<br>欢迎请维护者喝杯咖啡 ☕
+    </div>
+    <div class="btn-row" style="margin-top:18px">
+      <button class="modal-btn primary" onclick="closeAuthorModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div id="gesture-help-modal" class="modal-mask" onclick="if(event.target===this)closeGestureHelp()">
+  <div class="modal" style="max-width:680px;max-height:85vh;overflow-y:auto;padding:24px 28px">
+    <h2 style="margin:0 0 12px">手势控歌 · 判别逻辑</h2>
+    <div style="text-align:center"><img src="gesture-help.png" style="display:inline-block;max-width:100%;border-radius:10px" alt="手势控歌判别逻辑"></div>
+    <div style="margin-top:10px;font:11px/1.5 sans-serif;color:rgba(255,255,255,.55)">
+      阈值 T1/T2/T3 · 保持时间 · 冷却间隔 可在下方滑块自行调整。迟滞防止边界抖动。
+    </div>
+    <div class="btn-row" style="margin-top:14px">
+      <button class="modal-btn primary" onclick="closeGestureHelp()">知道了</button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>

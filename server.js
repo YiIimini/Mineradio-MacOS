@@ -74,9 +74,63 @@ const {
 
 // --- Wire up sub-modules (deferred setup after function definitions) ---
 let _modulesWired = false;
+// ── LX 音源桥接 ──
+let lxBridge = null;
+
+function getLxSourceDir() {
+  return path.join((process.env.MINERADIO_USER_DATA || require('os').homedir() + '/Library/Application Support/Mineradio-MacOS'), '音源', '音源');
+}
+
+function copyDirSync(src, dest) {
+  if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
+  var files = fs.readdirSync(src);
+  for (var f of files) {
+    var s = path.join(src, f), d = path.join(dest, f);
+    if (fs.statSync(s).isDirectory()) copyDirSync(s, d);
+    else fs.copyFileSync(s, d);
+  }
+}
+
+function getLxBundledDir() {
+  return path.join(__dirname, '音源', '音源');
+}
+
+function getLxBridge() {
+  if (!lxBridge) {
+    try { lxBridge = require('./lx-source-bridge'); } catch(e) { console.warn('[LX] 桥接加载失败:', e.message); lxBridge = null; }
+  }
+  return lxBridge;
+}
+var _lxLoading = false;
+function initLxSources(forceReload) {
+  if (_lxLoading) { console.log('[LX] 正在加载中，跳过重复请求'); return; }
+  _lxLoading = true;
+  try {
+    if (forceReload) {
+      delete require.cache[require.resolve('./lx-source-bridge')];
+      lxBridge = require('./lx-source-bridge');
+    }
+    const bridge = getLxBridge();
+    if (!bridge) { _lxLoading = false; return; }
+    const dir = getLxSourceDir();
+    const bundledDir = getLxBundledDir();
+    if (!fs.existsSync(dir) && fs.existsSync(bundledDir)) { fs.mkdirSync(dir, { recursive: true }); copyDirSync(bundledDir, dir); }
+    if (fs.existsSync(dir)) {
+      bridge.loadSourceDirectory(dir).then(sources => {
+        const keys = Object.keys(sources);
+        console.log(`[LX] 已加载 ${keys.length} 个音源: ${keys.join(', ')}`);
+        _lxLoading = false;
+      }).catch(e => { console.warn('[LX] 加载音源失败:', e.message); _lxLoading = false; });
+    } else {
+      _lxLoading = false;
+    }
+  } catch(e) { console.warn('[LX] 初始化失败:', e.message); _lxLoading = false; }
+}
+
 function wireModules() {
   if (_modulesWired) return;
   _modulesWired = true;
+  initLxSources(); // 加载 LX 音源
 
   // Weather module needs: handleSearch, handleSongUrl, mapSongRecord, requestText, requestJson, UA
   weatherModule.setup({
@@ -3116,6 +3170,10 @@ const server = http.createServer(async (req, res) => {
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  // Allow blob Workers for music-tempo analysis
+  if (req.url === '/' || (req.url && req.url.endsWith('.html'))) {
+    res.setHeader('Content-Security-Policy', "worker-src 'self' blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https: blob:");
+  }
 
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
@@ -3289,7 +3347,7 @@ const server = http.createServer(async (req, res) => {
       const songs = await handleSearch(kw, limit);
       sendJSON(res, { songs });
     } catch (err) { console.error('[Search]', err); sendJSON(res, { error: err.message, songs: [] }, 500); }
-}
+  }
 
   ROUTES['/api/qq/search'] = async function(req, res, url) {
     try {
@@ -3967,6 +4025,151 @@ const server = http.createServer(async (req, res) => {
       sendJSON(res, { error: err.message, tracks: [] }, 500);
     }
 }
+
+  // ── LX 音源 API ──
+  ROUTES['/api/lx/sources'] = async function(req, res) {
+    var bridge = getLxBridge();
+    if (!bridge) { sendJSON(res, { error: 'LX 桥接未加载' }, 500); return; }
+    var dir = getLxSourceDir();
+    var allScripts = [];
+    var failedScripts = [];
+    if (fs.existsSync(dir)) {
+      var files = fs.readdirSync(dir).filter(function(f){ return f.endsWith('.js'); });
+      var loaded = bridge.getLoadedSources();
+      var loadedNames = Object.values(loaded).map(function(s){ return s.scriptName; });
+      files.forEach(function(f){
+        allScripts.push(f);
+        if (loadedNames.indexOf(f) < 0 && f !== '音乐下载器 v6.js') {
+          // Try to load individually
+          try {
+            var fullPath = path.join(dir, f);
+            var content = fs.readFileSync(fullPath, 'utf8');
+            var hasInit = /send\s*\(\s*['"]inited['"]|globalThis\.lx\.send/.test(content);
+            var hasHandler = /\.on\s*\(\s*['"]request['"]/.test(content);
+            var hasRequest = /lx\.request\b|makeRequest|fetch\s*\(/.test(content);
+            var reasons = [];
+            if (!hasInit) reasons.push('缺少音源注册(send)');
+            if (!hasHandler) reasons.push('缺少请求处理(on)');
+            if (!hasRequest) reasons.push('缺少网络请求');
+            if (reasons.length) failedScripts.push({ name: f, reason: reasons.join('; ') });
+          } catch(e) { failedScripts.push({ name: f, reason: e.message }); }
+        }
+      });
+    }
+    sendJSON(res, { sources: bridge.getLoadedSources(), status: bridge.getSourceStatus(), allScripts: allScripts, failedScripts: failedScripts, ok: true });
+  };
+  ROUTES['/api/lx/delete'] = async function(req, res, url) {
+    var name = url.searchParams.get('name') || '';
+    if (!name || name.indexOf('..') >= 0 || name.indexOf('/') >= 0) { sendJSON(res, { error: '无效文件名' }, 400); return; }
+    var dir = getLxSourceDir();
+    var filePath = path.join(dir, name);
+    if (!fs.existsSync(filePath)) { sendJSON(res, { error: '文件不存在' }, 404); return; }
+    try { fs.unlinkSync(filePath); console.log('[LX] 已删除音源:', name); } catch(e) { sendJSON(res, { error: e.message }, 500); return; }
+    sendJSON(res, { ok: true, name: name });
+  };
+  ROUTES['/api/lx/reload'] = async function(req, res) {
+    initLxSources(true);
+    sendJSON(res, { ok: true });
+  };
+  ROUTES['/api/lx/source/toggle'] = async function(req, res, url) {
+    var bridge = getLxBridge();
+    if (!bridge) { sendJSON(res, { error: 'LX 桥接未加载' }, 500); return; }
+    var name = url.searchParams.get('name') || '';
+    var enable = url.searchParams.get('enable') === '1';
+    if (!name) { sendJSON(res, { error: '缺少音源名称' }, 400); return; }
+    if (enable) bridge.enableSource(name); else bridge.disableSource(name);
+    sendJSON(res, { ok: true, name, enabled: enable });
+  };
+  ROUTES['/api/lx/upload'] = async function(req, res) {
+    if (req.method !== 'POST') { sendJSON(res, { error: '仅支持 POST' }, 405); return; }
+    var body = await readRequestBody(req);
+    if (!body) { sendJSON(res, { error: '请求体为空' }, 400); return; }
+    var boundary = (req.headers['content-type'] || '').match(/boundary=(.+)/);
+    if (!boundary) { sendJSON(res, { error: '需要 multipart/form-data' }, 400); return; }
+    var raw = Buffer.from(body).toString('binary');
+    var parts = raw.split('--' + boundary[1]);
+    var fileData = null, fileName = '';
+    for (var p of parts) {
+      if (p.indexOf('filename=') < 0) continue;
+      var nameMatch = p.match(/filename="([^"]+)"/);
+      if (nameMatch) fileName = nameMatch[1];
+      var dataStart = p.indexOf('\r\n\r\n');
+      if (dataStart >= 0) {
+        var end = p.lastIndexOf('\r\n');
+        fileData = p.substring(dataStart + 4, end > dataStart ? end : p.length);
+      }
+    }
+    if (!fileData || !fileName) { sendJSON(res, { error: '未找到文件' }, 400); return; }
+    // Validate: must contain LX source patterns
+    var content = Buffer.from(fileData, 'binary').toString('utf8');
+    var hasInit = /send\s*\(\s*['"]inited['"]|globalThis\.lx\.send|\.send\s*\(\s*['"]inited/.test(content);
+    var hasHandler = /\.on\s*\(\s*['"]request['"]|on\s*\(\s*['"]request/.test(content);
+    var hasRequest = /lx\.request\b|makeRequest|fetch\s*\(/.test(content);
+    if (!hasInit || !hasHandler) {
+      sendJSON(res, { error: '音源验证失败：脚本需包含 send("inited") 注册音源 和 on("request") 处理请求。请更换有效的 LX 音源脚本。' }, 400);
+      return;
+    }
+    if (!hasRequest) {
+      sendJSON(res, { error: '音源验证失败：脚本需包含网络请求逻辑 (lx.request / fetch)。请更换有效的 LX 音源脚本。' }, 400);
+      return;
+    }
+    // Save to directory
+    var destDir = getLxSourceDir();
+    if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+    var safeName = fileName.replace(/[\\/:*?"<>|]/g, '_');
+    var destPath = path.join(destDir, safeName);
+    fs.writeFileSync(destPath, content, 'utf8');
+    console.log('[LX] 音源已安装:', safeName);
+    // Reload sources
+    initLxSources(true);
+    sendJSON(res, { ok: true, name: fileName, savedAs: safeName });
+  };
+  ROUTES['/api/lx/search'] = async function(req, res, url) {
+    var keyword = url.searchParams.get('keywords') || url.searchParams.get('keyword') || '';
+    var limit = parseInt(url.searchParams.get('limit') || '15');
+    if (!keyword) { sendJSON(res, { error: '缺少关键词' }, 400); return; }
+    var bridge = getLxBridge();
+    if (!bridge) { sendJSON(res, { error: 'LX 桥接未加载' }, 500); return; }
+    var sources = bridge.getLoadedSources();
+    var results = [];
+    var keys = Object.keys(sources);
+    // Try each source with search action
+    for (var i = 0; i < Math.min(keys.length, 6); i++) {
+      try {
+        var searchResults = await searchLxSource(keys[i], keyword, limit);
+        if (searchResults && searchResults.length) {
+          results = results.concat(searchResults);
+          if (results.length >= limit) break;
+        }
+      } catch(e) {}
+    }
+    var normSongs = results.slice(0, limit).map(function(r, i){
+      return {
+        name: r.name || r.title || r.songname || (keyword + ' #' + (i+1)),
+        artist: r.artist || r.singer || r.author || 'LX 音源',
+        id: r.id || r.songid || r.mid || ('lx_' + i),
+        songmid: r.songmid || r.mid || r.id || ('lx_' + i),
+        source: 'lx', provider: 'lx', type: 'song',
+        cover: r.cover || r.pic || r.img || '',
+        album: r.album || r.albumname || ''
+      };
+    });
+    sendJSON(res, { songs: normSongs, sources: keys, keyword: keyword, ok: true });
+  };
+  ROUTES['/api/lx/url'] = async function(req, res, url) {
+    var source = url.searchParams.get('source') || '';
+    var songId = url.searchParams.get('id') || '';
+    var quality = url.searchParams.get('quality') || 'exhigh';
+    if (!source || !songId) { sendJSON(res, { error: '缺少 source 或 id' }, 400); return; }
+    var bridge = getLxBridge();
+    if (!bridge) { sendJSON(res, { error: 'LX 桥接未加载' }, 500); return; }
+    try {
+      var audioUrl = await bridge.getMusicUrl(source, { songmid: songId, id: songId }, quality);
+      sendJSON(res, { url: audioUrl, ok: true });
+    } catch(e) {
+      sendJSON(res, { error: e.message }, 500);
+    }
+  };
 
   var handler = ROUTES[pn];
   if (handler) { await handler(req, res, url); return; }

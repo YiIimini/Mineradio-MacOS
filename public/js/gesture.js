@@ -1,10 +1,9 @@
 // ============================================================
-//  摄像头 / 手势 v8 — 仅保留手势, 头部追踪已下线
-//   - 21 个关键点用 EMA 平滑滤波, 消除抖动
-//   - 食指尖 + 手掌中心 共同推开粒子 (真实手感, 不再是单点小球)
-//   - 在 hand-canvas 上画出手掌骨架, 视觉跟随手
-//   - 捏合 = 拖动旋转封面 (Y 反向修正)
-//   - 没有挥扫 / 没有手势切歌
+//  摄像头 / 手势 v9 — 手势播放控制
+//   - 握拳保持1秒 → 暂停 | 手掌张开保持1秒 → 播放
+//   - 手掌快速左滑 → 上一首 | 右滑 → 下一首
+//   - 双手比X → 随机模式
+//   - 捏合拖动旋转封面 | 手掌推开粒子 | 握拳收束粒子
 // ============================================================
 function startHeadTracking(){}     // stub: 兼容旧调用
 function stopHeadTracking(){}      // stub
@@ -21,6 +20,13 @@ var particleSpin = { vx: 0, vy: 0, damping: 0.90 };
 // 手势驱动的总旋转 (累计角度), 输出到 particles
 var gestureRotation = { x: 0, y: 0 };
 var gestureGrip = { value: 0, target: 0, openness: 1, lastState: 'open', pulse: 0 };
+// Playback gesture state
+var playbackGesture = {
+  _lastFingerCount: -1, _fingerCountStart: 0, _fingerTriggered: false,
+  lastActionAt: 0,  // cooldown tracker
+};
+var GESTURE_HOLD_MS = 800;        // hold duration for playback gesture
+var GESTURE_ACTION_COOLDOWN = 1500;  // min ms between playback actions
 var PARTICLE_POINTER_SPIN_X = 0.0032;
 var PARTICLE_POINTER_SPIN_Y = 0.0034;
 var PARTICLE_HAND_SPIN_X = 4.15;
@@ -90,12 +96,12 @@ async function startGestureControl() {
     document.body.appendChild(gestureVideo);
     gestureHands = new Hands({ locateFile: function(f){ return 'https://cdn.jsdelivr.net/npm/@mediapipe/hands/' + f; } });
     // modelComplexity:1 比 0 更稳定, 但仍流畅. 提高 confidence 减少误检
-    gestureHands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
+    gestureHands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.65, minTrackingConfidence: 0.65 });
     gestureHands.onResults(function(res){
       if (!gestureActive) return;
-      var lm = res.multiHandLandmarks && res.multiHandLandmarks[0];
-      if (!lm) { onHandLost(); return; }
-      processHandFrame(lm);
+      var landmarks = res.multiHandLandmarks;
+      if (!landmarks || !landmarks.length) { onHandLost(); return; }
+      processHandFrame(landmarks[0]);
     });
     gestureCamera = new Camera(gestureVideo, { onFrame: async function(){ if (gestureHands) await gestureHands.send({ image: gestureVideo }); }, width: 480, height: 360 });
     await gestureCamera.start();
@@ -105,7 +111,7 @@ async function startGestureControl() {
     handCanvasCtx = handCanvas.getContext('2d');
     resizeHandCanvas();
     handCanvas.classList.add('show');
-    showToast('手势已开启: 手掌推开 · 捏合旋转 · 握拳收束');
+    showToast('手势视觉已开启 · 播放控制需单独启用');
     showGestureHUD('待命', 0, '把手放进视野');
   } catch (e) {
     console.warn('Gesture failed:', e);
@@ -129,10 +135,14 @@ function stopGestureControl() {
   gestureGrip.value = 0;
   gestureGrip.target = 0;
   gestureGrip.openness = 1;
-  document.getElementById('gesture-hud').classList.remove('show');
-  if (handCanvas) {
-    handCanvas.classList.remove('show');
-    if (handCanvasCtx) handCanvasCtx.clearRect(0, 0, handCanvas.width, handCanvas.height);
+  // Only hide HUD/canvas if neither visual nor playback gestures are active
+  var anyGestureActive = (typeof fx !== 'undefined' && fx && (fx.cam === 'gesture' || fx.cam === 'playback'));
+  if (!anyGestureActive) {
+    document.getElementById('gesture-hud').classList.remove('show');
+    if (handCanvas) {
+      handCanvas.classList.remove('show');
+      if (handCanvasCtx) handCanvasCtx.clearRect(0, 0, handCanvas.width, handCanvas.height);
+    }
   }
 }
 
@@ -156,7 +166,8 @@ function onHandLost() {
   if (performance.now() - handLmLastSeen > 600) {
     handLmSmooth = null;
     if (handCanvasCtx) handCanvasCtx.clearRect(0, 0, innerWidth, innerHeight);
-    showGestureHUD('待命', 0, '把手放进视野');
+    var anyActive = typeof fx !== 'undefined' && fx && (fx.cam === 'gesture' || fx.cam === 'playback');
+    showGestureHUD('待命', 0, anyActive ? '把手放进视野' : '');
   }
 }
 
@@ -197,78 +208,129 @@ function processHandFrame(rawLm) {
   handLmLastSeen = performance.now();
   var lm = smoothLandmarks(rawLm);
 
-  // 推开粒子位置: 手掌中心 (而非单一食指)
   var palm = palmCenter(lm);
   var openness = handOpenness(lm, palm);
   gestureGrip.openness += (openness - gestureGrip.openness) * 0.28;
   var gripTarget = clampRange(1 - openness, 0, 1);
   gestureGrip.target = gripTarget > 0.55 ? gripTarget : 0;
-  var ndcX = palm.x * 2 - 1;
-  var ndcY = -(palm.y * 2 - 1);
-  var handLocalX = ndcX * PLANE_SIZE * 0.62;
-  var handLocalY = ndcY * PLANE_SIZE * 0.62;
-  if (particleLocalPointFromNdc(ndcX, ndcY, particlePointerLocalHit)) {
-    // 平滑推动 (避免 uHandXY 跳变)
-    handLocalX = particlePointerLocalHit.x;
-    handLocalY = particlePointerLocalHit.y;
+
+  // Visual gesture effects — only when cam is set to gesture
+  var visualActive = typeof fx !== 'undefined' && fx && fx.cam === 'gesture';
+  if (visualActive) {
+    var ndcX = palm.x * 2 - 1;
+    var ndcY = -(palm.y * 2 - 1);
+    var handLocalX = ndcX * PLANE_SIZE * 0.62;
+    var handLocalY = ndcY * PLANE_SIZE * 0.62;
+    if (particleLocalPointFromNdc(ndcX, ndcY, particlePointerLocalHit)) {
+      handLocalX = particlePointerLocalHit.x;
+      handLocalY = particlePointerLocalHit.y;
+    }
+    var cur = uniforms.uHandXY.value;
+    cur.x += (handLocalX - cur.x) * 0.48;
+    cur.y += (handLocalY - cur.y) * 0.48;
+    var tgtActive = 0.44 + openness * 0.56;
+    uniforms.uHandActive.value += (tgtActive - uniforms.uHandActive.value) * 0.26;
+  } else {
+    uniforms.uHandActive.value *= 0.9;
   }
-  var cur = uniforms.uHandXY.value;
-  cur.x += (handLocalX - cur.x) * 0.48;
-  cur.y += (handLocalY - cur.y) * 0.48;
-  var tgtActive = 0.44 + openness * 0.56;
-  uniforms.uHandActive.value += (tgtActive - uniforms.uHandActive.value) * 0.26;
 
   // 捏合检测 (拇指 4 与食指 8)
   var pinchDist = Math.hypot(lm[8].x - lm[4].x, lm[8].y - lm[4].y);
   var isPinch = pinchDist < 0.075 && openness > 0.28;
   var isFist = !isPinch && gripTarget > 0.68;
 
-  if (isPinch && !pinchState.active) {
-    unlockCenteredView();
-    pinchState.active = true;
-    pinchState.lastX = palm.x;
-    pinchState.lastY = palm.y;
-    pinchState.lastT = performance.now();
-    particleSpin.vx = particleSpin.vy = 0;
-    gestureGrip.target = Math.min(0.34, gestureGrip.target);
-    showGestureHUD('捏合拖动', 1, '移动手掌 -> 旋转封面');
-  } else if (isPinch && pinchState.active) {
-    unlockCenteredView();
-    var dx = palm.x - pinchState.lastX;
-    var dy = palm.y - pinchState.lastY;
-    var nowPinch = performance.now();
-    var pinchDt = Math.max(1 / 120, Math.min(0.08, (nowPinch - pinchState.lastT) / 1000 || 1 / 60));
-    // v8: 方向修正 - 上下手与封面旋转同向
-    var spinY = dx * PARTICLE_HAND_SPIN_Y;
-    var spinX = dy * PARTICLE_HAND_SPIN_X;
-    gestureRotation.y += spinY;
-    gestureRotation.x += spinX;
-    particleSpin.vy = clampParticleSpinVelocity(spinY / pinchDt * 0.48);
-    particleSpin.vx = clampParticleSpinVelocity(spinX / pinchDt * 0.48);
-    pinchState.lastX = palm.x;
-    pinchState.lastY = palm.y;
-    pinchState.lastT = nowPinch;
-    gestureGrip.target = Math.min(0.34, gestureGrip.target);
-    showGestureHUD('拖动中', 1, '松手后保留惯性');
-  } else if (!isPinch && pinchState.active) {
-    pinchState.active = false;
-    showGestureHUD('松开', 0.4, '可继续触碰或捏合');
-  } else if (isFist) {
-    if (gestureGrip.lastState !== 'fist') {
-      gestureGrip.pulse = 1;
-      uniforms.uBurstAmt.value = Math.max(uniforms.uBurstAmt.value, 0.26);
+  if (visualActive) {
+    if (isPinch && !pinchState.active) {
+      unlockCenteredView();
+      pinchState.active = true;
+      pinchState.lastX = palm.x;
+      pinchState.lastY = palm.y;
+      pinchState.lastT = performance.now();
+      particleSpin.vx = particleSpin.vy = 0;
+      gestureGrip.target = Math.min(0.34, gestureGrip.target);
+      showGestureHUD('捏合拖动', 1, '移动手掌 -> 旋转封面');
+    } else if (isPinch && pinchState.active) {
+      unlockCenteredView();
+      var dx = palm.x - pinchState.lastX;
+      var dy = palm.y - pinchState.lastY;
+      var nowPinch = performance.now();
+      var pinchDt = Math.max(1 / 120, Math.min(0.08, (nowPinch - pinchState.lastT) / 1000 || 1 / 60));
+      var spinY = dx * PARTICLE_HAND_SPIN_Y;
+      var spinX = dy * PARTICLE_HAND_SPIN_X;
+      gestureRotation.y += spinY;
+      gestureRotation.x += spinX;
+      particleSpin.vy = clampParticleSpinVelocity(spinY / pinchDt * 0.48);
+      particleSpin.vx = clampParticleSpinVelocity(spinX / pinchDt * 0.48);
+      pinchState.lastX = palm.x;
+      pinchState.lastY = palm.y;
+      pinchState.lastT = nowPinch;
+      gestureGrip.target = Math.min(0.34, gestureGrip.target);
+      showGestureHUD('拖动中', 1, '松手后保留惯性');
+    } else if (!isPinch && pinchState.active) {
+      pinchState.active = false;
+      showGestureHUD('松开', 0.4, '可继续触碰或捏合');
+    } else if (isFist) {
+      if (gestureGrip.lastState !== 'fist') {
+        gestureGrip.pulse = 1;
+        uniforms.uBurstAmt.value = Math.max(uniforms.uBurstAmt.value, 0.26);
+      }
+      gestureGrip.lastState = 'fist';
+      showGestureHUD('握拳收束', Math.max(0.55, gripTarget), '粒子向中心收缩');
+    } else {
+      if (gestureGrip.lastState === 'fist' && openness > 0.58) {
+        uniforms.uBurstAmt.value = Math.max(uniforms.uBurstAmt.value, 0.18);
+      }
+      gestureGrip.lastState = openness > 0.62 ? 'open' : 'hover';
+      showGestureHUD(openness > 0.62 ? '张开恢复' : '悬停', 0.30 + openness * 0.34, '手掌推开粒子 / 捏合旋转 / 握拳收束');
     }
-    gestureGrip.lastState = 'fist';
-    showGestureHUD('握拳收束', Math.max(0.55, gripTarget), '粒子向中心收缩');
-  } else {
-    if (gestureGrip.lastState === 'fist' && openness > 0.58) {
-      uniforms.uBurstAmt.value = Math.max(uniforms.uBurstAmt.value, 0.18);
-    }
-    gestureGrip.lastState = openness > 0.62 ? 'open' : 'hover';
-    showGestureHUD(openness > 0.62 ? '张开恢复' : '悬停', 0.30 + openness * 0.34, '手掌推开粒子 / 捏合旋转 / 握拳收束');
   }
 
-  drawHandSkeleton(lm, isPinch, openness, isFist);
+  // ─── Playback gesture: user-configurable thresholds ───
+  if (typeof fx !== 'undefined' && fx && fx.cam === 'playback') {
+    var now = performance.now();
+    var fTh = Number(fx.gestureFistThreshold) || 0.16;
+    var iTh = Number(fx.gestureFingerThreshold) || 0.38;
+    var pTh = Number(fx.gesturePalmThreshold) || 0.62;
+    var hMs = Number(fx.gestureHoldMs) || 800;
+    var cMs = Number(fx.gestureCooldownMs) || 1500;
+    var rawTier = openness < fTh ? 0 : (openness < iTh ? 1 : (openness > pTh ? 4 : -1));
+    if (rawTier >= 0 && rawTier !== playbackGesture._lastFingerCount) {
+      var switching = playbackGesture._lastFingerCount < 0 || true; // allow switching
+      var hyst = 0.04; // hysteresis margin
+      if (!switching && playbackGesture._lastFingerCount >= 0) {
+        if (rawTier === 0 && openness > fTh + hyst) switching = false;
+        else if (rawTier === 1 && (openness < fTh + hyst || openness > iTh + hyst)) switching = false;
+        else if (rawTier === 4 && openness < pTh - hyst) switching = false;
+        else switching = true;
+      }
+      if (switching) {
+        playbackGesture._fingerCountStart = now;
+        playbackGesture._lastFingerCount = rawTier;
+        playbackGesture._fingerTriggered = false;
+      }
+    }
+    var tier = playbackGesture._lastFingerCount;
+    if (tier >= 0 && !playbackGesture._fingerTriggered
+        && (now - playbackGesture._fingerCountStart) > hMs
+        && (now - playbackGesture.lastActionAt) > cMs) {
+      playbackGesture._fingerTriggered = true;
+      playbackGesture.lastActionAt = now;
+      if (tier === 0) {       // ✊ 拳头 → 播放
+        if (typeof togglePlay === 'function' && typeof playing !== 'undefined' && !playing) togglePlay();
+        showGestureHUD('✊ 播放', 1, '');
+      } else if (tier === 1) { // ☝️ 食指 → 下一首
+        if (typeof nextTrack === 'function') nextTrack();
+        showGestureHUD('☝ 下一首', 1, '');
+      } else if (tier === 4) { // ✋ 手掌 → 暂停
+        if (typeof togglePlay === 'function' && typeof playing !== 'undefined' && playing) togglePlay();
+        showGestureHUD('✋ 暂停', 1, '');
+      }
+      playbackGesture._fingerCountStart = 0;
+    }
+  }
+
+  if (visualActive) drawHandSkeleton(lm, isPinch, openness, isFist);
+  return { palm: palm, openness: openness, isFist: isFist };
 }
 
 // 画手掌骨架: 连线 + 关节圆点

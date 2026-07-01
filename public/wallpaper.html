@@ -82,8 +82,23 @@
       ctx.restore();
     }
     var WALLPAPER_FPS = 30;  // cap at 30fps — wallpaper is mostly static slow motion
+    var WALLPAPER_PAUSE_POLL_MS = 2000;  // GPU opt: when paused, check for resume every 2s
     var wallpaperLastFrame = 0;
     function draw(nowMs){
+      // GPU opt: pause rendering when main window covers wallpaper (fullscreen/maximized)
+      if (state.paused) {
+        if (nowMs - wallpaperLastFrame < WALLPAPER_PAUSE_POLL_MS) {
+          requestAnimationFrame(draw);
+          return;
+        }
+        wallpaperLastFrame = nowMs;
+        // Fall through once per poll interval to allow the loop to resume cleanly
+        // but still skip the expensive draw — just check state and re-queue
+        if (state.paused) {
+          requestAnimationFrame(draw);
+          return;
+        }
+      }
       // Frame rate limiter: skip frames above WALLPAPER_FPS to save GPU
       if (nowMs - wallpaperLastFrame < 1000 / WALLPAPER_FPS) {
         requestAnimationFrame(draw);
